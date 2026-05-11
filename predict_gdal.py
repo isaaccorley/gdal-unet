@@ -93,7 +93,6 @@ MAX_INTERMEDIATE_BYTES = 800_000_000  # ~800 MB cap on per-chunk neighbors raste
 # many-banded intermediates).
 COFLAGS = [
     "--co", "BIGTIFF=IF_SAFER",
-    "--co", "PROFILE=BASELINE",
     "--co", "INTERLEAVE=BAND",
 ]
 

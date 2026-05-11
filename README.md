@@ -78,6 +78,50 @@ python predict_gdal.py samples/1717_image.tif samples/1717_gdal_probs.tif
 sbatch run_predict.slurm
 ```
 
+## Results so far
+
+End-to-end forward pass on a 512×512 NAIP RGBN patch (`samples/1717_image.tif`):
+
+| Metric | Value |
+|---|---|
+| Wall time (16-cpu node, 8-way ThreadPool) | **513 s** (~8.5 min) |
+| Subprocesses | 2198 |
+| Per-subprocess avg | 1.47 s |
+| Cumulative gdal time | 3234 s |
+| Parallel speedup | **6.3×** |
+| Output | 2-band Float16 probability raster, sums to 1.0 |
+
+### vs PyTorch reference
+
+Same checkpoint loaded into `smp.Unet(resnet18, in=4, classes=2)`:
+
+| Metric | PyTorch | GDAL CLI |
+|---|---|---|
+| road pixels (@0.5) | 10.83 % | 5.31 % |
+| IoU vs GT | 0.637 | 0.207 |
+| Binary agreement | — | 88.6 % |
+
+The pipeline is **structurally correct** but **off in alignment**: many
+pixels disagree near road edges, which is where strided ops and
+nearest-neighbor upsamples disagree by half a pixel. Known divergence
+sources:
+
+1. **Stride-2 convs done as full-res-conv + nearest-downsample.** PyTorch
+   samples at `(0, 0), (0, 2), …`; GDAL's `reproject -r nearest` picks
+   nearest source pixel from dest-pixel center, which can be off by one.
+2. **3×3 MaxPool stride 2** — PyTorch zero-pads, GDAL `neighbors` uses
+   edge replication. Boundary differs.
+3. **7×7 stem conv** — GDAL probably edge-replicates, PyTorch zero-pads.
+   The boundary effects compound through 5 downsamples.
+4. **smp decoder upsample** — PyTorch `Upsample(scale=2, mode="nearest")`
+   replicates each pixel as a 2×2 block. GDAL `reproject` does the same
+   in principle but the source-pixel-center mapping can off-by-one.
+5. **Float16 throughout.** Mean magnitude is fine; tail divergence is
+   masked by alignment, not precision.
+
+Fixing 1–4 requires careful per-op offset handling (probably custom
+`--bbox` on each reproject) and is the natural next step.
+
 ## Why
 
 Funny. Almost certainly impractical for real deployment compared to
