@@ -1,0 +1,31 @@
+# SLURM logs
+predict_*.out
+predict_*.err
+*.slurm.out
+*.slurm.err
+slurm-*.out
+
+# Per-run scratch
+work_*/
+samples/*_gdal_probs*
+samples/*_probs*
+*.npy
+results.png
+ref_probs.npy
+
+# Big originals (use HF download)
+unet-resnet18.pt
+model-ep-torch280-cu126.pt2
+unet-resnet18-*.pth
+naip_sample.tif
+ftw_*.tif
+s2_*.tif
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
