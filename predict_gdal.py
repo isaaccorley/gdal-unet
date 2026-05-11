@@ -29,6 +29,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
+import rasterio
+from rasterio.windows import Window
 
 ENV = "/projects/bgtj/isaaccorley/envs/ftw-tile"
 os.environ["PATH"] = f"{ENV}/bin:" + os.environ.get("PATH", "")
@@ -97,6 +99,69 @@ COFLAGS = [
 ]
 
 
+# ----------------------------------------------------------------------------
+# Geometric helpers (numpy via rasterio).  These are not "pure gdal CLI" but
+# they isolate the parts where PyTorch and `gdal raster ...` disagree by
+# half a pixel or a padding mode -- doing them numerically here gives us
+# exact PyTorch semantics.
+# ----------------------------------------------------------------------------
+def pad_zeros(in_tif: Path, out_tif: Path, pad: int) -> Path:
+    """Zero-pad a multi-band raster by `pad` rows/cols on each side."""
+    if pad == 0:
+        shutil.copy(str(in_tif), str(out_tif))
+        return out_tif
+    with rasterio.open(in_tif) as src:
+        data = src.read()
+        prof = src.profile.copy()
+    out = np.pad(data, ((0, 0), (pad, pad), (pad, pad)),
+                 mode="constant", constant_values=0)
+    prof.update(height=out.shape[1], width=out.shape[2])
+    with rasterio.open(out_tif, "w", **prof) as dst:
+        dst.write(out)
+    return out_tif
+
+
+def crop_center(in_tif: Path, out_tif: Path, pad: int) -> Path:
+    """Inverse of pad_zeros: drop `pad` rows/cols from each side."""
+    if pad == 0:
+        shutil.copy(str(in_tif), str(out_tif))
+        return out_tif
+    with rasterio.open(in_tif) as src:
+        H, W = src.height, src.width
+        data = src.read(window=Window(pad, pad, W - 2 * pad, H - 2 * pad))
+        prof = src.profile.copy()
+    prof.update(height=H - 2 * pad, width=W - 2 * pad)
+    with rasterio.open(out_tif, "w", **prof) as dst:
+        dst.write(data)
+    return out_tif
+
+
+def stride2_downsample(in_tif: Path, out_tif: Path) -> Path:
+    """Sample every other pixel starting at (0, 0) — matches PyTorch
+    `conv2d(stride=2)` output sampling exactly."""
+    with rasterio.open(in_tif) as src:
+        data = src.read()
+        prof = src.profile.copy()
+    out = data[:, ::2, ::2]
+    prof.update(height=out.shape[1], width=out.shape[2])
+    with rasterio.open(out_tif, "w", **prof) as dst:
+        dst.write(out)
+    return out_tif
+
+
+def nearest_2x_up(in_tif: Path, out_tif: Path) -> Path:
+    """Replicate each pixel as a 2x2 block — matches PyTorch
+    `nn.Upsample(scale_factor=2, mode='nearest')` exactly."""
+    with rasterio.open(in_tif) as src:
+        data = src.read()
+        prof = src.profile.copy()
+    out = data.repeat(2, axis=1).repeat(2, axis=2)
+    prof.update(height=out.shape[1], width=out.shape[2])
+    with rasterio.open(out_tif, "w", **prof) as dst:
+        dst.write(out)
+    return out_tif
+
+
 def pick_chunk_size(Cin: int, Cout: int, spatial_hw: tuple[int, int]) -> int:
     """Choose K so K*K*Cout*H*W*4 bytes stays under MAX_INTERMEDIATE_BYTES."""
     H, W_ = spatial_hw
@@ -137,7 +202,7 @@ def _run_chunk_diag(nb: Path, c: int, k: int, Cout: int, work: Path) -> Path:
        "-i", f"X={nb}",
        "--ot", "Float16", *COFLAGS,
        str(partial))
-    nb.unlink(missing_ok=True)
+    nb.unlink(missing_ok=True) if not KEEP_WORK else None
     return partial
 
 
@@ -162,7 +227,7 @@ def _sum_two(a: Path, b: Path, out: Path, Cout: int,
        "-i", f"X={a}", "-i", f"Y={b}",
        "--ot", "Float16", *COFLAGS,
        str(out))
-    a.unlink(missing_ok=True); b.unlink(missing_ok=True)
+    a.unlink(missing_ok=True) if not KEEP_WORK else None; b.unlink(missing_ok=True) if not KEEP_WORK else None
     return out
 
 
@@ -186,7 +251,7 @@ def _bnrelu_inplace(in_p: Path, out_p: Path, Cout: int,
        "-i", f"X={in_p}",
        "--ot", "Float16", *COFLAGS,
        str(out_p))
-    in_p.unlink(missing_ok=True)
+    in_p.unlink(missing_ok=True) if not KEEP_WORK else None
     return out_p
 
 
@@ -207,10 +272,23 @@ def conv_layer(in_tif: Path, out_tif: Path, name: str,
     4. Optional stride-2 nearest downsample.
     """
     Cout, Cin, kH, kW = kernel.shape
-    Wi, Hi = get_size(in_tif)
-    K = chunk_size or pick_chunk_size(Cin, Cout, (Hi, Wi))
     work = workdir / name
     work.mkdir(parents=True, exist_ok=True)
+
+    # PyTorch conv with kernel size kH uses padding = kH // 2 (zero pad).
+    # GDAL `neighbors` edge-replicates at the raster boundary -- mismatch.
+    # Fix: zero-pad the raster ourselves, run neighbors on the padded raster,
+    # then crop the output back to the original spatial size.
+    pad = kH // 2
+    if pad > 0:
+        padded_in = work / "padded_in.tif"
+        pad_zeros(in_tif, padded_in, pad)
+        conv_in = padded_in
+    else:
+        conv_in = in_tif
+
+    Wi, Hi = get_size(conv_in)
+    K = chunk_size or pick_chunk_size(Cin, Cout, (Hi, Wi))
 
     chunks = []
     for c in range(0, Cin, K):
@@ -220,7 +298,7 @@ def conv_layer(in_tif: Path, out_tif: Path, name: str,
     # Bundle both stages into one function so a worker handles both end-to-end
     # without coming back to the scheduler between them.
     def _chunk(c: int, k: int) -> Path:
-        nb = _run_chunk_pipeline(in_tif, kernel, c, k, Cout, work)
+        nb = _run_chunk_pipeline(conv_in, kernel, c, k, Cout, work)
         return _run_chunk_diag(nb, c, k, Cout, work)
 
     fn_args = [(_chunk, (c, k), {}) for (c, k) in chunks]
@@ -258,49 +336,64 @@ def conv_layer(in_tif: Path, out_tif: Path, name: str,
         new = work / "fin.tif"
         final = _bnrelu_inplace(final, new, Cout, bn_a, bn_b, bias, relu)
 
-    # Stride 2: nearest-downsample to half size.
+    # Crop padded boundary back to original spatial size.
+    if pad > 0:
+        cropped = work / "cropped.tif"
+        crop_center(final, cropped, pad)
+        if not KEEP_WORK:
+            final.unlink(missing_ok=True)
+        final = cropped
+
+    # Stride 2: pick every other pixel starting at (0, 0) -- exact match
+    # for PyTorch `conv2d(stride=2)` output positions.
     if stride == 2:
-        Wi, Hi = get_size(in_tif)
-        sh("gdal", "raster", "reproject", "-q", "--overwrite",
-           "--size", f"{Wi // 2},{Hi // 2}",
-           "-r", "nearest",
-           str(final), str(out_tif))
-        final.unlink(missing_ok=True)
+        stride2_downsample(final, out_tif)
+        if not KEEP_WORK:
+            final.unlink(missing_ok=True)
     else:
         shutil.move(str(final), str(out_tif))
 
-    shutil.rmtree(work, ignore_errors=True)
+    if not KEEP_WORK:
+        shutil.rmtree(work, ignore_errors=True)
     return out_tif
 
 
 def maxpool3x3_stride2(in_tif: Path, out_tif: Path, *, workdir: Path) -> Path:
-    """3x3 maxpool stride 2.  Equivalent to: 3x3 sliding max + 2x downsample."""
-    tmp = workdir / f"{out_tif.stem}_mp.tif"
-    # 3x3 sliding max — equal-weight kernel with --method max.
-    # Pass a 3x3 all-ones kernel (kernel weights are ignored for --method max,
-    # only the neighborhood size matters).
+    """3x3 maxpool stride 2 with padding 1, matching `nn.MaxPool2d(3, 2, 1)`.
+
+    Post-ReLU activations are non-negative, so zero-padding is equivalent
+    to PyTorch's -inf padding for max purposes (max(0, anything>=0) = the
+    other value if positive, else 0).
+    """
+    # Zero-pad by 1 row/col on each side
+    padded = workdir / f"{out_tif.stem}_padded.tif"
+    pad_zeros(in_tif, padded, 1)
+    # 3x3 sliding max
+    full = workdir / f"{out_tif.stem}_full.tif"
     k = kstr(np.ones((3, 3)))
     sh("gdal", "raster", "neighbors", "-q", "--overwrite",
        "--kernel", k,
        "--method", "max",
        "--ot", "Float16", *COFLAGS,
-       str(in_tif), str(tmp))
-    Wi, Hi = get_size(in_tif)
-    sh("gdal", "raster", "reproject", "-q", "--overwrite",
-       "--size", f"{Wi // 2},{Hi // 2}",
-       "-r", "nearest", *COFLAGS,
-       str(tmp), str(out_tif))
-    tmp.unlink(missing_ok=True)
+       str(padded), str(full))
+    if not KEEP_WORK:
+        padded.unlink(missing_ok=True)
+    # Crop back to original H, W
+    cropped = workdir / f"{out_tif.stem}_cropped.tif"
+    crop_center(full, cropped, 1)
+    if not KEEP_WORK:
+        full.unlink(missing_ok=True)
+    # Pick every other pixel for stride-2 sampling
+    stride2_downsample(cropped, out_tif)
+    if not KEEP_WORK:
+        cropped.unlink(missing_ok=True)
     return out_tif
 
 
 def upsample2x(in_tif: Path, out_tif: Path) -> Path:
-    Wi, Hi = get_size(in_tif)
-    sh("gdal", "raster", "reproject", "-q", "--overwrite",
-       "--size", f"{Wi * 2},{Hi * 2}",
-       "-r", "nearest", *COFLAGS,
-       str(in_tif), str(out_tif))
-    return out_tif
+    """Nearest 2x upsample: each pixel becomes a 2x2 block, no smoothing.
+    Matches `nn.Upsample(scale_factor=2, mode='nearest')` exactly."""
+    return nearest_2x_up(in_tif, out_tif)
 
 
 def concat(tifs: list[Path], out_tif: Path) -> Path:
@@ -393,7 +486,7 @@ def basic_block(in_tif: Path, out_tif: Path, *, layer: int, block: int,
                bn_a=W[f"{p}.conv2.bn_a"],
                bn_b=W[f"{p}.conv2.bn_b"],
                relu=False, workdir=workdir)
-    c1.unlink(missing_ok=True)
+    c1.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # skip path
     if block == 0 and layer > 1:
@@ -407,9 +500,9 @@ def basic_block(in_tif: Path, out_tif: Path, *, layer: int, block: int,
         skip = in_tif
 
     add_relu(c2, skip, out_tif, relu=True)
-    c2.unlink(missing_ok=True)
+    c2.unlink(missing_ok=True) if not KEEP_WORK else None
     if skip != in_tif:
-        skip.unlink(missing_ok=True)
+        skip.unlink(missing_ok=True) if not KEEP_WORK else None
     return out_tif
 
 
@@ -422,7 +515,7 @@ def decoder_block(in_tif: Path, skip_tif: Path | None, out_tif: Path, *,
     if skip_tif is not None:
         cat = workdir / f"d{idx}_cat.tif"
         concat([up, skip_tif], cat)
-        up.unlink(missing_ok=True)
+        up.unlink(missing_ok=True) if not KEEP_WORK else None
         layer_in = cat
     else:
         layer_in = up
@@ -432,13 +525,13 @@ def decoder_block(in_tif: Path, skip_tif: Path | None, out_tif: Path, *,
                kernel=W[f"d{idx}.c1.kernel"],
                bn_a=W[f"d{idx}.c1.bn_a"], bn_b=W[f"d{idx}.c1.bn_b"],
                relu=True, workdir=workdir)
-    layer_in.unlink(missing_ok=True)
+    layer_in.unlink(missing_ok=True) if not KEEP_WORK else None
 
     conv_layer(c1, out_tif, f"d{idx}_c2",
                kernel=W[f"d{idx}.c2.kernel"],
                bn_a=W[f"d{idx}.c2.bn_a"], bn_b=W[f"d{idx}.c2.bn_b"],
                relu=True, workdir=workdir)
-    c1.unlink(missing_ok=True)
+    c1.unlink(missing_ok=True) if not KEEP_WORK else None
     return out_tif
 
 
@@ -448,7 +541,7 @@ def forward(in_tif: Path, out_tif: Path, *, workdir: Path):
     fixed = workdir / "00_fixed.tif"
     fix_geo(in_tif, fixed)
     preprocess(fixed, pre)
-    fixed.unlink(missing_ok=True)
+    fixed.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # encoder
     # Stage 1 (stride 2): conv1 + bn1 + ReLU
@@ -457,17 +550,17 @@ def forward(in_tif: Path, out_tif: Path, *, workdir: Path):
                kernel=W["stem.kernel"],
                bn_a=W["stem.bn_a"], bn_b=W["stem.bn_b"],
                relu=True, stride=2, workdir=workdir)
-    pre.unlink(missing_ok=True)
+    pre.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # Stage 2: maxpool (stride 2) + layer1 (stride 1)
     mp = workdir / "02_mp.tif"
     maxpool3x3_stride2(s1, mp, workdir=workdir)
     l1a = workdir / "02a.tif"
     basic_block(mp, l1a, layer=1, block=0, stride=1, workdir=workdir)
-    mp.unlink(missing_ok=True)
+    mp.unlink(missing_ok=True) if not KEEP_WORK else None
     l1b = workdir / "02b.tif"
     basic_block(l1a, l1b, layer=1, block=1, stride=1, workdir=workdir)
-    l1a.unlink(missing_ok=True)
+    l1a.unlink(missing_ok=True) if not KEEP_WORK else None
     # l1b is the feature at stride 4 (after maxpool + layer1)
 
     # Stage 3: layer2 (stride 2 in first block)
@@ -475,47 +568,47 @@ def forward(in_tif: Path, out_tif: Path, *, workdir: Path):
     basic_block(l1b, l2a, layer=2, block=0, stride=2, workdir=workdir)
     l2b = workdir / "03b.tif"
     basic_block(l2a, l2b, layer=2, block=1, stride=1, workdir=workdir)
-    l2a.unlink(missing_ok=True)
+    l2a.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # Stage 4: layer3
     l3a = workdir / "04a.tif"
     basic_block(l2b, l3a, layer=3, block=0, stride=2, workdir=workdir)
     l3b = workdir / "04b.tif"
     basic_block(l3a, l3b, layer=3, block=1, stride=1, workdir=workdir)
-    l3a.unlink(missing_ok=True)
+    l3a.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # Stage 5: layer4 (deepest)
     l4a = workdir / "05a.tif"
     basic_block(l3b, l4a, layer=4, block=0, stride=2, workdir=workdir)
     l4b = workdir / "05b.tif"  # final encoder feature at stride 32
     basic_block(l4a, l4b, layer=4, block=1, stride=1, workdir=workdir)
-    l4a.unlink(missing_ok=True)
+    l4a.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # smp Unet decoder takes features (rev order): [l4b, l3b, l2b, l1b, s1]
     # block 0: in=l4b (512ch), skip=l3b (256ch) -> 256ch
     d0 = workdir / "d0.tif"
     decoder_block(l4b, l3b, d0, idx=0, workdir=workdir)
-    l4b.unlink(missing_ok=True); l3b.unlink(missing_ok=True)
+    l4b.unlink(missing_ok=True) if not KEEP_WORK else None; l3b.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # block 1: in=d0, skip=l2b (128) -> 128
     d1 = workdir / "d1.tif"
     decoder_block(d0, l2b, d1, idx=1, workdir=workdir)
-    d0.unlink(missing_ok=True); l2b.unlink(missing_ok=True)
+    d0.unlink(missing_ok=True) if not KEEP_WORK else None; l2b.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # block 2: in=d1, skip=l1b (64) -> 64
     d2 = workdir / "d2.tif"
     decoder_block(d1, l1b, d2, idx=2, workdir=workdir)
-    d1.unlink(missing_ok=True); l1b.unlink(missing_ok=True)
+    d1.unlink(missing_ok=True) if not KEEP_WORK else None; l1b.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # block 3: in=d2, skip=s1 (64) -> 32
     d3 = workdir / "d3.tif"
     decoder_block(d2, s1, d3, idx=3, workdir=workdir)
-    d2.unlink(missing_ok=True); s1.unlink(missing_ok=True)
+    d2.unlink(missing_ok=True) if not KEEP_WORK else None; s1.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # block 4: in=d3, no skip -> 16
     d4 = workdir / "d4.tif"
     decoder_block(d3, None, d4, idx=4, workdir=workdir)
-    d3.unlink(missing_ok=True)
+    d3.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # segmentation head: 3x3 conv 16->2 with bias, no BN no ReLU
     logits = workdir / "logits.tif"
@@ -523,12 +616,20 @@ def forward(in_tif: Path, out_tif: Path, *, workdir: Path):
                kernel=W["head.kernel"],
                bias=W["head.bias"],
                relu=False, workdir=workdir)
-    d4.unlink(missing_ok=True)
+    d4.unlink(missing_ok=True) if not KEEP_WORK else None
 
     # softmax across 2 classes -> 2-band float32 probability raster
     softmax_2cls(logits, out_tif)
-    logits.unlink(missing_ok=True)
+    logits.unlink(missing_ok=True) if not KEEP_WORK else None
     return out_tif
+
+
+KEEP_WORK = False
+
+
+def maybe_unlink(p: Path):
+    if not KEEP_WORK:
+        p.unlink(missing_ok=True) if not KEEP_WORK else None
 
 
 def main():
@@ -536,8 +637,10 @@ def main():
     p.add_argument("input")
     p.add_argument("output", nargs="?", default=None)
     p.add_argument("--keep-work", action="store_true",
-                   help="don't delete intermediate work dir on exit")
+                   help="don't delete intermediate work dir or layer outputs")
     args = p.parse_args()
+    global KEEP_WORK
+    KEEP_WORK = args.keep_work
 
     in_tif = Path(args.input).resolve()
     out_tif = Path(args.output or in_tif.with_suffix(".gdal_probs.tif")).resolve()

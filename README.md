@@ -97,30 +97,63 @@ Same checkpoint loaded into `smp.Unet(resnet18, in=4, classes=2)`:
 
 | Metric | PyTorch | GDAL CLI |
 |---|---|---|
-| road pixels (@0.5) | 10.83 % | 5.31 % |
-| IoU vs GT | 0.637 | 0.207 |
-| Binary agreement | — | 88.6 % |
+| road pixels (@0.5) | 10.83 % | 10.82 % |
+| IoU vs GT | 0.6374 | **0.6372** |
+| argmax agreement | — | **99.99 %** |
+| max P(road) diff | — | 2.9e-3 |
+| mean P(road) diff | — | 1.1e-4 |
 
-The pipeline is **structurally correct** but **off in alignment**: many
-pixels disagree near road edges, which is where strided ops and
-nearest-neighbor upsamples disagree by half a pixel. Known divergence
-sources:
+**The pipeline reproduces PyTorch bit-close.** The remaining ~10
+disagreeing pixels out of 262144 are entirely from Float16 quantization
+at exactly-0.5 probabilities.
 
-1. **Stride-2 convs done as full-res-conv + nearest-downsample.** PyTorch
-   samples at `(0, 0), (0, 2), …`; GDAL's `reproject -r nearest` picks
-   nearest source pixel from dest-pixel center, which can be off by one.
-2. **3×3 MaxPool stride 2** — PyTorch zero-pads, GDAL `neighbors` uses
-   edge replication. Boundary differs.
-3. **7×7 stem conv** — GDAL probably edge-replicates, PyTorch zero-pads.
-   The boundary effects compound through 5 downsamples.
-4. **smp decoder upsample** — PyTorch `Upsample(scale=2, mode="nearest")`
-   replicates each pixel as a 2×2 block. GDAL `reproject` does the same
-   in principle but the source-pixel-center mapping can off-by-one.
-5. **Float16 throughout.** Mean magnitude is fine; tail divergence is
-   masked by alignment, not precision.
+### How we got there: profile-then-debug
 
-Fixing 1–4 requires careful per-op offset handling (probably custom
-`--bbox` on each reproject) and is the natural next step.
+A first naïve pass collapsed to **IoU 0.21** (vs PyTorch 0.64) even
+though all the math was structurally right. Running `profile_layers.py`
+to dump stage-by-stage activations from PyTorch and from each
+GDAL-intermediate tif uncovered the divergence by stage (cosine
+similarity to PyTorch):
+
+```
+                     before fix     after fix
+pre   (input/255)     1.0000         1.0000
+stem  (7x7 s=2)       0.7979   →     1.0000
+mp    (3x3 s=2)       0.8395   →     1.0000
+l1                    0.6803   →     1.0000
+l2                    0.3963   →     1.0000
+l3                    0.2921   →     1.0000   ← worst before
+l4                    0.4827   →     1.0000
+d0..d4                0.51-0.73 →    1.0000
+logits                0.8569   →     1.0000
+```
+
+Two root causes, both at the boundary between `gdal raster ...` and
+PyTorch's tensor semantics:
+
+1. **Boundary padding.** PyTorch `conv2d(padding=N)` zero-pads;
+   `gdal raster neighbors` edge-replicates. For a 7×7 stem conv with
+   padding 3, that's a 3-pixel boundary error that **compounds through
+   the 5 residual stages** because the same wrong edge gets added back
+   via every skip connection. Fix: explicitly zero-pad the raster
+   (via `rasterio` + `np.pad`) before each `neighbors` call and crop the
+   output back to the original spatial size.
+
+2. **Stride-2 alignment.** PyTorch `conv2d(stride=2)` samples at
+   `(0, 0), (0, 2), (0, 4), …`; `gdal raster reproject -r nearest
+   --size W/2,H/2` maps each dest-pixel center to the nearest
+   source-pixel center, which lands at `(2i+1, 2j+1)` — off by one.
+   Over 5 stride-2 stages that's a 32-pixel global shift at the
+   bottleneck. Fix: replace the reproject-based downsample with
+   `data[:, ::2, ::2]` via numpy.
+
+Same two fixes apply to `MaxPool2d(3, 2, 1)` (zero-pad + `::2`) and
+to `Upsample(scale_factor=2, mode='nearest')` (`np.repeat(2)` twice).
+
+All four geometric primitives now live in
+[`predict_gdal.py`](predict_gdal.py) as small numpy helpers that read
+the input tif with `rasterio`, transform spatially in memory, and write
+out a fresh tif before handing back to GDAL CLI for the actual math.
 
 ## Why
 
