@@ -42,7 +42,7 @@ jobs:
         run: |
           conda install -y -c conda-forge \
               cmake ninja \
-              libgdal '>=3.11' \
+              'libgdal>=3.11' \
               llvm-openmp \
               numpy rasterio scipy pytorch
 
