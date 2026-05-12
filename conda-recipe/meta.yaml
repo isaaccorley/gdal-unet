@@ -1,4 +1,4 @@
-{% set name = "gdal-unet" %}
+{% set name = "gdal-conv2d" %}
 {% set version = "0.1.0" %}
 
 package:
@@ -6,17 +6,13 @@ package:
   version: {{ version }}
 
 source:
-  # On submission, replace this with the tarball URL from a github release.
-  # During local development, drop a `source.path: ../` line instead and
-  # comment out url/sha256.
   url: https://github.com/isaaccorley/gdal-unet/archive/refs/tags/v{{ version }}.tar.gz
+  # Set after cutting the GitHub release; the release-job notes print this.
   sha256: 0000000000000000000000000000000000000000000000000000000000000000
 
 build:
   number: 0
-  skip: true  # [win]   # native Windows build needs MSVC + libomp; defer
-  entry_points:
-    - gdal-unet = gdal_unet.cli:main
+  skip: true  # [win]
 
 requirements:
   build:
@@ -25,43 +21,38 @@ requirements:
     - ninja
     - make  # [unix]
   host:
-    - python >=3.10
-    - pip
-    - setuptools >=64
-    - wheel
     - libgdal >=3.11
     - llvm-openmp  # [osx]
     - libgomp      # [linux]
   run:
-    - python >=3.10
     - libgdal >=3.11
     - llvm-openmp  # [osx]
     - libgomp      # [linux]
-    - numpy
-    - rasterio
 
 test:
-  imports:
-    - gdal_unet
-    - gdal_unet.backbones.resnet18
   commands:
     - gdal-conv2d --help
-    - gdal-unet --help
-    - gdal-unet predict --help
 
 about:
   home: https://github.com/isaaccorley/gdal-unet
   license: MIT
   license_family: MIT
-  license_file: LICENSE
-  summary: Run U-Net inference via GDAL CLI primitives
+  license_file: ../LICENSE
+  summary: A fused Conv2d + BN + activation primitive built on GDAL CLI
   description: |
-    gdal-unet runs a conv-based U-Net forward pass through GDAL CLI
-    operations (neighbors, calc, reproject, stack) plus a small C++ helper
-    (gdal-conv2d) for the per-layer multi-channel conv + BN + ReLU.
-    Loads pretrained PyTorch weights as a .npz file.  Output is a 2-band
-    Float16 probability GeoTIFF that matches the PyTorch reference
-    bit-close (per-stage cosine 1.0000, IoU within 0.0002).
+    gdal-conv2d is a single C++17 binary that performs one fused
+    Conv2d + (bias|BN) + activation + (stride|padding|depthwise) layer
+    using GDAL for I/O.  Also exposes maxpool, nearest-upsample, add,
+    concat, scale, and stable softmax as additional --mode flags.
+
+    Designed to be chained ~30-150 times via a shell script to run a
+    full conv-based U-Net forward pass.  See the parent project at
+    https://github.com/isaaccorley/gdal-unet for the gdal-unet-export
+    Python tool that generates such scripts from PyTorch checkpoints.
+
+    Outputs Float16 GeoTIFFs preserving CRS + geotransform.  Inner conv
+    loops parallelize over output channels via OpenMP.
+
   doc_url: https://github.com/isaaccorley/gdal-unet
   dev_url: https://github.com/isaaccorley/gdal-unet
 

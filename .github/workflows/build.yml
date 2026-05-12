@@ -8,6 +8,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write   # release job uploads artifacts
+
 jobs:
   build:
     name: ${{ matrix.os }}-${{ matrix.arch }}
@@ -23,7 +26,6 @@ jobs:
 
     defaults:
       run:
-        # `-l {0}` makes each step a login shell, so the conda env activates
         shell: bash -l {0}
 
     steps:
@@ -34,22 +36,18 @@ jobs:
           miniforge-version: latest
           channels: conda-forge
           channel-priority: strict
-          activate-environment: gdal-unet-build
+          activate-environment: gdal-conv2d-build
 
       - name: Install build deps via conda-forge
         run: |
           conda install -y -c conda-forge \
               cmake ninja \
               libgdal '>=3.11' \
-              llvm-openmp \
-              python '>=3.10' pip \
-              numpy rasterio
+              llvm-openmp
 
       - name: Configure
         run: |
-          mkdir -p cpp/build
-          cd cpp/build
-          cmake .. -G Ninja \
+          cmake -S cpp -B cpp/build -G Ninja \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install" \
               -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
@@ -60,34 +58,29 @@ jobs:
       - name: Install
         run: cmake --install cpp/build
 
-      - name: Sanity-check binary
+      - name: Sanity check
         run: |
           file "${{ github.workspace }}/install/bin/gdal-conv2d"
-          "${{ github.workspace }}/install/bin/gdal-conv2d" --help 2>&1 || true
+          "${{ github.workspace }}/install/bin/gdal-conv2d" --help
 
-      - name: Install Python package (editable)
-        run: pip install -e .
-
-      - name: Sanity-check Python CLI
+      - name: Per-mode parity tests
         run: |
-          gdal-unet --help
-          gdal-unet predict --help
+          export PATH="${{ github.workspace }}/install/bin:$PATH"
+          bash cpp/tests/test_modes.sh
 
       - name: Stage release bundle
         run: |
-          STAGE="gdal-unet-${{ matrix.os }}-${{ matrix.arch }}"
+          STAGE="gdal-conv2d-${{ matrix.os }}-${{ matrix.arch }}"
           mkdir -p "$STAGE"
           cp install/bin/gdal-conv2d "$STAGE/"
-          cp -r gdal_unet                "$STAGE/"
-          cp pyproject.toml              "$STAGE/"
-          cp README.md LICENSE           "$STAGE/" 2>/dev/null || true
+          cp README.md LICENSE       "$STAGE/" 2>/dev/null || true
           tar -czf "$STAGE.tar.gz" "$STAGE"
           ls -lh "$STAGE.tar.gz"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: gdal-unet-${{ matrix.os }}-${{ matrix.arch }}
-          path: gdal-unet-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+          name: gdal-conv2d-${{ matrix.os }}-${{ matrix.arch }}
+          path: gdal-conv2d-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
 
   release:
     needs: build
@@ -96,6 +89,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -103,7 +98,30 @@ jobs:
 
       - run: ls -lh dist/
 
+      - name: Compute sha256 of the source tarball (for conda-forge bump)
+        id: srctar
+        run: |
+          curl -sL -o /tmp/source.tar.gz \
+              "https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz"
+          sha=$(sha256sum /tmp/source.tar.gz | cut -d' ' -f1)
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "Source tarball sha256: $sha"
+
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/gdal-unet-*.tar.gz
+          files: dist/gdal-conv2d-*.tar.gz
           generate_release_notes: true
+          body: |
+            ## Binary downloads
+
+            One tarball per platform.  Each contains the `gdal-conv2d` binary
+            plus README and LICENSE.
+
+            ## conda-forge
+
+            Source tarball sha256 (paste into `conda-recipe/meta.yaml`
+            on the next conda-forge feedstock PR):
+
+            ```
+            sha256: ${{ steps.srctar.outputs.sha256 }}
+            ```

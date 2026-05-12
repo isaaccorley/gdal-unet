@@ -11,8 +11,3 @@ cmake .. \
     -DCMAKE_PREFIX_PATH="$PREFIX"
 cmake --build . -j "${CPU_COUNT}"
 cmake --install .
-cd "$SRC_DIR"
-
-# Install the Python package; provides the `gdal-unet` console script via
-# the entry-point declared in pyproject.toml.
-"$PYTHON" -m pip install . --no-deps --no-build-isolation -vv
