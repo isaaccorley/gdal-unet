@@ -71,6 +71,7 @@ jobs:
 
       - name: Per-mode parity tests
         run: |
+          export GDAL_CONV2D="$CONDA_PREFIX/bin/gdal-conv2d"
           export PYTHON="$CONDA_PREFIX/bin/python"
           bash cpp/tests/test_modes.sh
 
