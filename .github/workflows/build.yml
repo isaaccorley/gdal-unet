@@ -22,7 +22,9 @@ jobs:
           - { os: linux, arch: x86_64, runner: ubuntu-latest      }
           - { os: linux, arch: arm64,  runner: ubuntu-24.04-arm   }
           - { os: macos, arch: arm64,  runner: macos-14           }
-          - { os: macos, arch: x86_64, runner: macos-13           }
+          # macos-13 (Intel) re-enable when GH runner availability improves.
+          # Apple Silicon is the dominant macOS audience right now.
+          # - { os: macos, arch: x86_64, runner: macos-13           }
 
     defaults:
       run:
