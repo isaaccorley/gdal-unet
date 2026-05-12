@@ -86,8 +86,15 @@ def get_size(tif: Path) -> tuple[int, int]:
     return int(w), int(h)
 
 
-CHUNK = 8  # default input-channel chunk size for the diagonal-trick fusion
+CHUNK = 32  # default input-channel chunk size for the diagonal-trick fusion
 MAX_INTERMEDIATE_BYTES = 800_000_000  # ~800 MB cap on per-chunk neighbors raster
+
+# Workdir base: prefer fast-tmpfs to avoid disk I/O on every intermediate.
+def _workdir_base() -> Path:
+    for p in (os.environ.get("SLURM_TMPDIR"), "/dev/shm", "/tmp"):
+        if p and Path(p).is_dir() and os.access(p, os.W_OK):
+            return Path(p)
+    return Path.cwd()
 
 # All write ops: BIGTIFF (avoid 4 GB TIFF format limit) + minimal metadata
 # (intermediates inherit the input's CRS/geotransform; GeoTIFF tags add I/O
@@ -163,11 +170,13 @@ def nearest_2x_up(in_tif: Path, out_tif: Path) -> Path:
 
 
 def pick_chunk_size(Cin: int, Cout: int, spatial_hw: tuple[int, int]) -> int:
-    """Choose K so K*K*Cout*H*W*4 bytes stays under MAX_INTERMEDIATE_BYTES."""
+    """Choose K so the neighbors output (K*K*Cout bands at Float16) stays under
+    both the memory budget and the 65535-band TIFF format limit."""
     H, W_ = spatial_hw
     per_band = max(1, H * W_ * 2)  # Float16 = 2 bytes
-    cap = max(1, int((MAX_INTERMEDIATE_BYTES / (Cout * per_band)) ** 0.5))
-    return min(CHUNK, Cin, cap)
+    mem_cap = max(1, int((MAX_INTERMEDIATE_BYTES / (Cout * per_band)) ** 0.5))
+    band_cap = max(1, int((65000 / Cout) ** 0.5))  # leave a small safety margin
+    return min(CHUNK, Cin, mem_cap, band_cap)
 
 
 def _run_chunk_pipeline(in_tif: Path, kernel: np.ndarray, c: int, k: int,
@@ -644,12 +653,15 @@ def main():
 
     in_tif = Path(args.input).resolve()
     out_tif = Path(args.output or in_tif.with_suffix(".gdal_probs.tif")).resolve()
-    workdir = ROOT / f"work_{int(time.time())}"
-    workdir.mkdir(exist_ok=True)
+    # Use fast tmpfs for the work dir (cuts NFS I/O on every intermediate).
+    # If --keep-work is set, fall back to ROOT so the dir survives for profiling.
+    base = ROOT if args.keep_work else _workdir_base()
+    workdir = base / f"work_{int(time.time())}_{os.getpid()}"
+    workdir.mkdir(parents=True, exist_ok=True)
 
     print(f"[input]  {in_tif.name}")
     print(f"[output] {out_tif.name}")
-    print(f"[work]   {workdir.name}")
+    print(f"[work]   {workdir}")
     t0 = time.time()
     try:
         forward(in_tif, out_tif, workdir=workdir)

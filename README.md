@@ -78,6 +78,19 @@ python predict_gdal.py samples/1717_image.tif samples/1717_gdal_probs.tif
 sbatch run_predict.slurm
 ```
 
+## Two implementations
+
+| | `predict_gdal.py` (CLI-only) | `cpp/predict_cpp.py` (C++ plugin) |
+|---|---|---|
+| **Math runtime** | `gdal raster ...` subprocesses | `gdalnn_conv` (custom C++ binary) + a few `gdal raster ...` |
+| **Subprocesses / forward pass** | ~2185 | **31** |
+| **Wall time (16-CPU SLURM)** | ~520 s | **~7.5 s** |
+| **Peak RSS** | ~6 GB intermediate tifs on disk | **156 MB** |
+| **Per-stage cosine vs PyTorch** | 1.0000 | 1.0000 |
+| **IoU vs GT** | 0.6372 | 0.6372 |
+
+**The C++ path is ~70× faster** with identical numerical output. Source: [`cpp/src/gdalnn_conv.cpp`](cpp/src/gdalnn_conv.cpp) (330 LOC, OpenMP over output channels, scalar inner loops, GDAL Float16 I/O).
+
 ## Results so far
 
 End-to-end forward pass on a 512×512 NAIP RGBN patch (`samples/1717_image.tif`):
