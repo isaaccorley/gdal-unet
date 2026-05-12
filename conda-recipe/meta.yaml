@@ -1,0 +1,63 @@
+{% set name = "gdal-unet" %}
+{% set version = "0.1.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  # On submission, replace this with the tarball URL from a github release.
+  # During local development, drop a `source.path: ../` line instead and
+  # comment out url/sha256.
+  url: https://github.com/isaaccorley/gdal-unet/archive/refs/tags/v{{ version }}.tar.gz
+  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+
+build:
+  number: 0
+  skip: true  # [win]   # native Windows build needs MSVC + libomp; defer
+
+requirements:
+  build:
+    - {{ compiler('cxx') }}
+    - cmake >=3.15
+    - ninja
+    - make  # [unix]
+  host:
+    - libgdal >=3.11
+    - llvm-openmp  # [osx]
+    - libgomp      # [linux]
+  run:
+    - python >=3.10
+    - libgdal >=3.11
+    - llvm-openmp  # [osx]
+    - libgomp      # [linux]
+    - numpy
+    - rasterio
+
+test:
+  commands:
+    - gdalnn_conv --help
+  imports:
+    # the python orchestrator lives next to the binary; conda install puts it
+    # on PATH as predict_cpp.py
+    - {{ "True" }}
+
+about:
+  home: https://github.com/isaaccorley/gdal-unet
+  license: MIT
+  license_family: MIT
+  license_file: LICENSE
+  summary: Run U-Net inference via GDAL CLI primitives
+  description: |
+    gdal-unet runs a conv-based U-Net forward pass through GDAL CLI
+    operations (neighbors, calc, reproject, stack) plus a small C++ helper
+    (gdalnn_conv) for the per-layer multi-channel conv + BN + ReLU.
+    Loads pretrained PyTorch weights as a .npz file.  Output is a 2-band
+    Float16 probability GeoTIFF that matches the PyTorch reference
+    bit-close (per-stage cosine 1.0000, IoU within 0.0002).
+  doc_url: https://github.com/isaaccorley/gdal-unet
+  dev_url: https://github.com/isaaccorley/gdal-unet
+
+extra:
+  recipe-maintainers:
+    - isaaccorley

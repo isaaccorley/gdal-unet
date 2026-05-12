@@ -1,0 +1,98 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux, arch: x86_64, runner: ubuntu-latest      }
+          - { os: linux, arch: arm64,  runner: ubuntu-24.04-arm   }
+          - { os: macos, arch: arm64,  runner: macos-14           }
+          - { os: macos, arch: x86_64, runner: macos-13           }
+
+    defaults:
+      run:
+        # `-l {0}` makes each step a login shell, so the conda env activates
+        shell: bash -l {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+          activate-environment: gdalnn-build
+
+      - name: Install build deps via conda-forge
+        run: |
+          conda install -y -c conda-forge \
+              cmake ninja \
+              libgdal '>=3.11' \
+              llvm-openmp
+
+      - name: Configure
+        run: |
+          mkdir -p cpp/build
+          cd cpp/build
+          cmake .. -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install" \
+              -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+
+      - name: Build
+        run: cmake --build cpp/build -j
+
+      - name: Install
+        run: cmake --install cpp/build
+
+      - name: Sanity-check binary
+        run: |
+          file "${{ github.workspace }}/install/bin/gdalnn_conv"
+          "${{ github.workspace }}/install/bin/gdalnn_conv" --help 2>&1 || true
+
+      - name: Stage release bundle
+        run: |
+          STAGE="gdal-nn-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$STAGE"
+          cp install/bin/gdalnn_conv     "$STAGE/"
+          cp install/bin/predict_cpp.py  "$STAGE/"
+          cp README.md LICENSE           "$STAGE/" 2>/dev/null || true
+          tar -czf "$STAGE.tar.gz" "$STAGE"
+          ls -lh "$STAGE.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gdal-nn-${{ matrix.os }}-${{ matrix.arch }}
+          path: gdal-nn-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - run: ls -lh dist/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/gdal-nn-*.tar.gz
+          generate_release_notes: true
