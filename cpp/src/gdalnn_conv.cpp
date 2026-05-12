@@ -9,6 +9,7 @@
 #include <cpl_string.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +21,46 @@
 #include <vector>
 
 #include <omp.h>
+
+// Activation kinds
+enum class Act { NONE, RELU, RELU6, SWISH, GELU, HSWISH, SIGMOID };
+
+static inline float apply_act(float v, Act act) {
+    switch (act) {
+        case Act::NONE:   return v;
+        case Act::RELU:   return v < 0.0f ? 0.0f : v;
+        case Act::RELU6:  return v < 0.0f ? 0.0f : (v > 6.0f ? 6.0f : v);
+        case Act::SWISH:  return v / (1.0f + std::exp(-v));
+        case Act::SIGMOID: return 1.0f / (1.0f + std::exp(-v));
+        case Act::HSWISH: {
+            float t = v + 3.0f;
+            if (t < 0.0f) t = 0.0f; else if (t > 6.0f) t = 6.0f;
+            return v * t * (1.0f / 6.0f);
+        }
+        case Act::GELU: {
+            // tanh approximation (PyTorch approximate="tanh"); exact GELU
+            // would use erf, but the tanh form is bit-close enough for FP16
+            // pipelines.  smp encoders that use GELU (efficientnet-b*) use
+            // the silu / swish path anyway; we keep this for completeness.
+            const float k = 0.7978845608028654f;   // sqrt(2/pi)
+            float t = k * (v + 0.044715f * v * v * v);
+            return 0.5f * v * (1.0f + std::tanh(t));
+        }
+    }
+    return v;
+}
+
+static Act parse_act(const std::string& s) {
+    if (s == "none")    return Act::NONE;
+    if (s == "relu")    return Act::RELU;
+    if (s == "relu6")   return Act::RELU6;
+    if (s == "swish" || s == "silu") return Act::SWISH;
+    if (s == "gelu")    return Act::GELU;
+    if (s == "hswish" || s == "hard_swish") return Act::HSWISH;
+    if (s == "sigmoid") return Act::SIGMOID;
+    std::cerr << "unknown activation: " << s << "\n";
+    std::exit(2);
+}
 
 // ---------- Float16 helpers (IEEE-754 binary16) ----------
 // We use GDT_Float32 for RasterIO and pass GDT_Float32 buffers but the on-disk
@@ -74,6 +115,8 @@ struct Args {
     int Cout=0, Cin=0, kH=0, kW=0;
     std::string bn_a_path, bn_b_path, bias_path;
     bool relu = false;
+    Act activation = Act::NONE;
+    bool depthwise = false;
     int stride = 1;
     int padding = 0;
     std::string out_tif;
@@ -84,8 +127,11 @@ struct Args {
 static void usage() {
     std::cerr << "Usage: gdalnn_conv --in <in.tif> --kernel <k.bin> "
                  "--kernel-shape Cout,Cin,kH,kW [--bn-a a.bin --bn-b b.bin] "
-                 "[--bias bias.bin] [--relu] [--stride 1|2] [--padding P] "
-                 "--out <out.tif> [--threads N] [--co KEY=VAL ...]\n";
+                 "[--bias bias.bin] [--relu | --activation TYPE] [--depthwise] "
+                 "[--stride 1|2] [--padding P] "
+                 "--out <out.tif> [--threads N] [--co KEY=VAL ...]\n"
+                 "  --activation: none|relu|relu6|swish|silu|gelu|hswish|sigmoid\n"
+                 "  --depthwise:  Cout must equal Cin; kernel shape is Cin,1,kH,kW\n";
 }
 
 static bool parse_shape(const std::string& s, Args& a) {
@@ -109,7 +155,9 @@ static int parse_args(int argc, char** argv, Args& a) {
         else if (s == "--bn-a")         a.bn_a_path    = need("bn-a");
         else if (s == "--bn-b")         a.bn_b_path    = need("bn-b");
         else if (s == "--bias")         a.bias_path    = need("bias");
-        else if (s == "--relu")         a.relu = true;
+        else if (s == "--relu")         { a.relu = true; a.activation = Act::RELU; }
+        else if (s == "--activation")   a.activation = parse_act(need("activation"));
+        else if (s == "--depthwise")    a.depthwise = true;
         else if (s == "--stride")       a.stride = std::stoi(need("stride"));
         else if (s == "--padding")      a.padding = std::stoi(need("padding"));
         else if (s == "--out")          a.out_tif = need("out");
@@ -125,7 +173,10 @@ static int parse_args(int argc, char** argv, Args& a) {
     if (!a.bias_path.empty() && !a.bn_a_path.empty()) {
         std::cerr << "error: --bias and --bn-a are mutually exclusive\n"; return 2;
     }
-    if (a.stride != 1 && a.stride != 2) { std::cerr << "stride must be 1 or 2\n"; return 2; }
+    if (a.stride < 1) { std::cerr << "stride must be >= 1\n"; return 2; }
+    if (a.depthwise && a.Cout != a.Cin) {
+        std::cerr << "depthwise requires Cout==Cin\n"; return 2;
+    }
     return 0;
 }
 
@@ -196,7 +247,10 @@ int main(int argc, char** argv) {
     }
 
     // ---- Load kernel + optional bn / bias ----
-    const size_t kn = static_cast<size_t>(a.Cout) * a.Cin * a.kH * a.kW;
+    // For depthwise conv the kernel is (Cin, 1, kH, kW) -> kn = Cin*kH*kW.
+    const size_t kn = a.depthwise
+        ? static_cast<size_t>(a.Cin) * a.kH * a.kW
+        : static_cast<size_t>(a.Cout) * a.Cin * a.kH * a.kW;
     std::vector<float> kernel = read_raw_f16(a.kernel_path, kn);
     std::vector<float> bn_a, bn_b, bias;
     bool have_bn   = !a.bn_a_path.empty();
@@ -233,18 +287,29 @@ int main(int argc, char** argv) {
     const size_t k_outc_stride  = static_cast<size_t>(a.Cin) * k_chan_stride;
     const size_t out_chan_stride = static_cast<size_t>(Hout) * Wout;
 
+    const Act act = a.activation;
+    const bool depthwise = a.depthwise;
+
     #pragma omp parallel for schedule(dynamic, 1)
     for (int oc = 0; oc < a.Cout; ++oc) {
         float* out_oc = &out[oc * out_chan_stride];
-        const float* k_oc = &kernel[oc * k_outc_stride];
+        // For depthwise, output channel oc reads ONLY from input channel oc
+        // and uses kernel slice (oc, :, :, :) of shape (1, kH, kW).
+        const float* k_oc = depthwise
+            ? &kernel[static_cast<size_t>(oc) * k_chan_stride]
+            : &kernel[oc * k_outc_stride];
+        const int ic_lo = depthwise ? oc : 0;
+        const int ic_hi = depthwise ? oc + 1 : a.Cin;
         for (int i = 0; i < Hout; ++i) {
             const int isrc = i * S;
             for (int j = 0; j < Wout; ++j) {
                 const int jsrc = j * S;
                 float acc = 0.0f;
-                for (int ic = 0; ic < a.Cin; ++ic) {
+                for (int ic = ic_lo; ic < ic_hi; ++ic) {
                     const float* in_ic = src_ptr + ic * in_chan_stride;
-                    const float* k_ic  = k_oc + ic * k_chan_stride;
+                    const float* k_ic  = depthwise
+                        ? k_oc
+                        : k_oc + (ic - ic_lo) * k_chan_stride;
                     for (int ky = 0; ky < kH; ++ky) {
                         const float* in_row = in_ic + (isrc + ky) * Wsrc + jsrc;
                         const float* k_row  = k_ic + ky * kW;
@@ -257,27 +322,24 @@ int main(int argc, char** argv) {
             }
         }
 
-        // bias / BN / ReLU per output channel
+        // bias / BN / activation per output channel
         const float ba = have_bn ? bn_a[oc] : 1.0f;
         const float bb = have_bn ? bn_b[oc] : 0.0f;
         const float bi = have_bias ? bias[oc] : 0.0f;
-        const bool do_relu = a.relu;
         const size_t N = static_cast<size_t>(Hout) * Wout;
         if (have_bn) {
             for (size_t p = 0; p < N; ++p) {
                 float v = ba * out_oc[p] + bb;
-                if (do_relu && v < 0.0f) v = 0.0f;
-                out_oc[p] = v;
+                out_oc[p] = apply_act(v, act);
             }
         } else if (have_bias) {
             for (size_t p = 0; p < N; ++p) {
                 float v = out_oc[p] + bi;
-                if (do_relu && v < 0.0f) v = 0.0f;
-                out_oc[p] = v;
+                out_oc[p] = apply_act(v, act);
             }
-        } else if (do_relu) {
+        } else if (act != Act::NONE) {
             for (size_t p = 0; p < N; ++p) {
-                if (out_oc[p] < 0.0f) out_oc[p] = 0.0f;
+                out_oc[p] = apply_act(out_oc[p], act);
             }
         }
     }

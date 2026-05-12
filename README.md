@@ -1,5 +1,60 @@
 # gdal-unet
 
+> **Multi-backbone branch.** This branch adds direct PyTorch `.pt` loading
+> (no `.npz` step) and support for additional smp encoders.  See
+> [`Multi-backbone usage`](#multi-backbone-usage) below.
+
+## Multi-backbone usage
+
+```bash
+# Save a fresh smp model (any encoder smp supports)
+python -c "
+import torch, segmentation_models_pytorch as smp
+m = smp.Unet(encoder_name='resnet50', encoder_weights=None,
+             in_channels=4, classes=2)
+torch.save(m.state_dict(), 'unet_r50.pt')"
+
+# Run the gdal-CLI forward pass directly from the .pt (BN folding done
+# at load time, kernel + (a, b) tensors materialized lazily per layer).
+python -m gdal_unet.predict samples/1717_image.tif probs.tif \
+    --ckpt unet_r50.pt --arch resnet50
+```
+
+Supported encoders on this branch:
+
+| encoder | status | notes |
+|---|---|---|
+| `resnet18` | bit-close | original baseline |
+| `resnet34` | bit-close | (same path as r18; auto-detected) |
+| `resnet50`, `resnet101`, `resnet152` | bit-close | Bottleneck block |
+| `mobilenet_v2` | bit-close | depthwise + 1x1 expand/project + ReLU6 |
+| `mobilenet_v3_*` | stub | all primitives wired in `ops`, encoder TBD |
+| `efficientnet-b*` | stub | swish + SE wired, MBConv encoder TBD |
+
+Verify a backbone:
+
+```bash
+python tests/test_backbones.py resnet50 mobilenet_v2
+```
+
+The test instantiates a fresh smp.Unet, saves a `.pt`, runs both PyTorch and
+the gdal-CLI pipeline on a synthetic 128x128 4-band input, and prints
+per-stage cosine similarity + final softmax max-diff.
+
+## New primitives in `gdalnn_conv`
+
+| flag | meaning |
+|---|---|
+| `--activation {none,relu,relu6,swish,gelu,hswish,sigmoid}` | replaces single-purpose `--relu` (still accepted) |
+| `--depthwise` | kernel shape becomes `(Cin, 1, kH, kW)`; per-band conv (groups=Cin) |
+| `--stride N` | stride is now any positive integer (was 1 or 2) |
+
+Squeeze-and-Excitation is implemented in `gdal_unet/ops.py:se_block` as a
+numpy global-pool + two 1x1 conv "fc" layers + per-channel scale (cheap; no
+extra subprocesses).
+
+
+
 Run a U-Net (or any conv-based segmentation model) inference pipeline entirely through `gdal` CLI primitives. Loads pretrained PyTorch weights, runs the forward pass through `gdal raster ...` subprocesses (or, for speed, a small custom binary that uses GDAL for I/O). Outputs a probability GeoTIFF that matches the PyTorch reference bit-close.
 
 Reference model: [`isaaccorley/chesapeakersc`](https://huggingface.co/isaaccorley/chesapeakersc) — `smp.Unet(resnet18, in_channels=4, classes=2)`, 14.3 M params, trained on NAIP RGBN for road segmentation. Same architecture pattern works for any conv-based U-Net (different encoder, different classes).
