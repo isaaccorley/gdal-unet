@@ -212,6 +212,44 @@ def preprocess(in_tif: Path, out_tif: Path, *, in_channels: int = 4):
     write(out_tif, a, p)
 
 
+def pad_same_asym(in_tif: Path, out_tif: Path, *, k: int, stride: int):
+    """Pre-pad a raster with TF-style 'SAME' asymmetric padding.
+
+    Used by EfficientNet (which uses ``Conv2dStaticSamePadding``).  Pads with
+    zeros on right/bottom (the TF convention) when the required pad is odd.
+    After this op, follow up with ``ops.conv(..., padding=0, stride=stride)``.
+
+    For stride=1 the SAME padding is exactly ``k//2`` symmetric on each side
+    (this helper still works, but ``ops.conv`` with ``padding=k//2`` is faster).
+    For stride=2 with even input H, pad is 1 -> asymmetric (0 left/top,
+    1 right/bottom).  With odd input H, pad is 2 -> symmetric (1, 1).
+    """
+    with rasterio.open(in_tif) as src:
+        a = src.read()
+        p = src.profile.copy()
+    import math
+    C, H, W = a.shape
+    oh = math.ceil(H / stride)
+    ow = math.ceil(W / stride)
+    pad_h = max((oh - 1) * stride + k - H, 0)
+    pad_w = max((ow - 1) * stride + k - W, 0)
+    # TF SAME: pad_top = pad_h // 2, pad_bottom = pad_h - pad_top  (extra on bottom/right)
+    pt = pad_h // 2
+    pb = pad_h - pt
+    pl = pad_w // 2
+    pr = pad_w - pl
+    if pt == 0 and pb == 0 and pl == 0 and pr == 0:
+        # nothing to do -- just copy
+        write(out_tif, a, p)
+        return 0
+    Hp = H + pt + pb
+    Wp = W + pl + pr
+    out = np.zeros((C, Hp, Wp), dtype=a.dtype)
+    out[:, pt:pt + H, pl:pl + W] = a
+    write(out_tif, out, p)
+    return 0
+
+
 def maxpool3x3_s2(in_tif: Path, out_tif: Path):
     a, p = read(in_tif)
     a = a.astype(np.float32)
@@ -287,6 +325,9 @@ def activate(arr: np.ndarray, kind: str) -> np.ndarray:
         return 1.0 / (1.0 + np.exp(-arr))
     if kind in ("hswish", "hard_swish"):
         return arr * np.clip(arr + 3.0, 0, 6) / 6.0
+    if kind in ("hsigmoid", "hard_sigmoid"):
+        # torchvision's nn.Hardsigmoid: relu6(x + 3) / 6
+        return np.clip(arr + 3.0, 0, 6) / 6.0
     if kind == "gelu":
         # PyTorch default exact form; for the SE bottleneck activations we
         # never actually use this -- it's here for completeness.
@@ -327,6 +368,7 @@ def se_block(in_tif: Path, out_tif: Path, *,
              w1: np.ndarray, b1: np.ndarray,
              w2: np.ndarray, b2: np.ndarray,
              act1: str = "relu",
+             scale_activation: str = "sigmoid",
              workdir: Path, weights: WeightDir, key: str):
     """Squeeze-and-Excitation block.
 
@@ -350,7 +392,7 @@ def se_block(in_tif: Path, out_tif: Path, *,
     z = activate(z, act1)
     w2m = w2.reshape(w2.shape[0], w2.shape[1]).astype(np.float32)
     b2v = b2.astype(np.float32)
-    gate = activate(w2m @ z + b2v, "sigmoid")     # (C,)
+    gate = activate(w2m @ z + b2v, scale_activation)     # (C,)
     out = a * gate[:, None, None]
     write(out_tif, out, p)
     # so that NCALLS budget stays informative, charge two "synthetic" calls
