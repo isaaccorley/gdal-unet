@@ -1,11 +1,5 @@
-"""Emit a predict_<arch>.sh that runs full inference using gdal-conv2d.
-
-Reads shapes from the exported shapes.txt to bake the right --kernel-shape
-into each conv call.
-"""
+"""Generate predict_<arch>.sh from a state_dict + a weights dir of .bin files."""
 from pathlib import Path
-
-import re
 
 from .archs.resnet import _num_blocks, _is_bottleneck
 
@@ -125,17 +119,9 @@ def emit_resnet(out: Path, *, arch: str, sd: dict):
         # after last block of stage L, record feature
         feat_files.append(in_var)
 
-    # ---- Decoder ----
-    # smp.Unet:
-    #   rev = reversed(feats[1:])     i.e. [l4, l3, l2, l1, stem]
-    #   x = rev[0] (=l4)
-    #   skips = rev[1:] + [None]      i.e. [l3, l2, l1, stem, None]
-    # block i:
-    #   upsample x to (skips[i].H, skips[i].W) (or 2x cur if skip None)
-    #   concat with skip if present
-    #   conv1 -> bn -> relu, conv2 -> bn -> relu
-    # NOTE: this script uses --scale 2 upsample, which assumes power-of-2 ratios.
-    # That matches smp's resnet U-Net when input H,W are multiples of 32.
+    # Decoder: smp.Unet reverses encoder features, uses the deepest as input
+    # and the rest as skips.  --scale 2 upsample assumes input H,W are multiples
+    # of 32 (else the per-block upsample target would need explicit dimensions).
     rev = list(reversed(feat_files[1:]))  # [l4, l3, l2, l1, stem]
     x = rev[0]
     skips = rev[1:] + [None]
@@ -157,10 +143,7 @@ def emit_resnet(out: Path, *, arch: str, sd: dict):
         parts.append(f'CONV dec{i}_c2 "{c1}" "{c2}" 1 1 relu\n')
         cur = c2
 
-    # ---- Head + softmax ----
     parts.append('\n# ---- segmentation head + softmax ----\n')
-    # Head kernel is 3x3 in smp default; use padding from kH (from shapes file).
-    # smp default uses kernel_size=3 -> padding=1.
     parts.append(f'CONV head "{cur}" "$WORK/logits.tif" 1 1 none\n')
     parts.append('SOFTMAX "$WORK/logits.tif" "$OUT"\n')
     parts.append('\necho "[predict_{}] wrote $OUT"\n'.format(arch))
