@@ -8,7 +8,7 @@ package:
 source:
   url: https://github.com/isaaccorley/gdal-unet/archive/refs/tags/v{{ version }}.tar.gz
   # Set after cutting the GitHub release; the release-job notes print this.
-  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+  sha256: 97346600794f1da690e247a3e7d734623049550ccb11a8c3a88681e906f92bf5
 
 build:
   number: 0
