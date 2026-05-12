@@ -93,9 +93,21 @@ python cpp/predict/predict_cpp.py samples/1717_image.tif samples/1717_probs.tif
 
 ## Deployment
 
+### Supported platforms
+
+| Platform | Status |
+|---|---|
+| Linux x86_64 | ✅ CI-built |
+| Linux arm64 | ✅ CI-built |
+| macOS arm64 (Apple Silicon) | ✅ CI-built |
+| macOS x86_64 (Intel) | ✅ CI-built |
+| Windows | ❌ not built |
+
+Windows is unsupported by default — the geospatial-ML-via-CLI audience overlaps very little with Windows users (most Windows geo-ML happens inside ArcGIS or via WSL2, which is Linux anyway). Adding it later is a small diff: add `windows-latest` to the matrix in `.github/workflows/build.yml` and remove `skip: true  # [win]` from `conda-recipe/meta.yaml`. Patches welcome if anyone actually needs it.
+
 ### Binary releases (GitHub Actions)
 
-CI builds `gdalnn_conv` for **linux-x86_64, linux-arm64, macos-arm64, macos-x86_64** on every push and tag. See `.github/workflows/build.yml`. Tag-triggered runs (`v*`) attach the tarballs to a GitHub Release. End users download the right tarball and run:
+CI builds `gdalnn_conv` for the four supported platforms on every push and tag. See `.github/workflows/build.yml`. Tag-triggered runs (`v*`) attach the tarballs to a GitHub Release. End users download the right tarball and run:
 
 ```bash
 tar -xzf gdal-nn-macos-arm64.tar.gz
