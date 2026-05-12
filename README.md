@@ -78,18 +78,31 @@ python predict_gdal.py samples/1717_image.tif samples/1717_gdal_probs.tif
 sbatch run_predict.slurm
 ```
 
-## Two implementations
+## Three implementations, all matching PyTorch bit-close
 
-| | `predict_gdal.py` (CLI-only) | `cpp/predict_cpp.py` (C++ plugin) |
-|---|---|---|
-| **Math runtime** | `gdal raster ...` subprocesses | `gdalnn_conv` (custom C++ binary) + a few `gdal raster ...` |
-| **Subprocesses / forward pass** | ~2185 | **31** |
-| **Wall time (16-CPU SLURM)** | ~520 s | **~7.5 s** |
-| **Peak RSS** | ~6 GB intermediate tifs on disk | **156 MB** |
-| **Per-stage cosine vs PyTorch** | 1.0000 | 1.0000 |
-| **IoU vs GT** | 0.6372 | 0.6372 |
+| | `predict_gdal.py` (chunked-diag) | `vrt/build_vrt.py` (one VRT per layer) | `cpp/predict_cpp.py` (C++ binary) |
+|---|---|---|---|
+| **Conv math runtime** | many `gdal raster pipeline / calc` per chunk | one `gdal_translate vrt.xml` per layer | custom `gdalnn_conv` per layer |
+| **Subprocesses / forward** | ~2185 | **31** | **31** |
+| **Wall (16-CPU SLURM)** | ~520 s | **131 s** | **7.5 s** |
+| **Peak RSS** | many GB intermediate tifs | 672 MB | **156 MB** |
+| **Per-stage cosine vs PyTorch** | 1.0000 | 1.0000 | 1.0000 |
+| **argmax agreement** | 99.99 % | 99.99 % | 99.99 % |
+| **IoU vs GT** | 0.6372 | 0.6372 | 0.6372 |
 
-**The C++ path is ~70× faster** with identical numerical output. Source: [`cpp/src/gdalnn_conv.cpp`](cpp/src/gdalnn_conv.cpp) (330 LOC, OpenMP over output channels, scalar inner loops, GDAL Float16 I/O).
+PyTorch reference on the same input: IoU 0.6374.
+
+**The C++ binary is ~70× faster than the original** with identical numerical output. The VRT approach is **4× faster** while staying in pure GDAL CLI (no custom code). Pick your trade-off.
+
+### `gdalnn_conv` (the binary)
+
+330 lines of C++17 at [`cpp/src/gdalnn_conv.cpp`](cpp/src/gdalnn_conv.cpp). One process per conv layer: reads input + raw-binary kernel/BN/bias files, zero-pads, OpenMP-parallel naive triple-loop conv over output channels, fused BN affine + ReLU + optional stride-2 sampling, writes Float16 output preserving CRS/geotransform. The inner conv loop is intentionally scalar — subprocess startup was the bottleneck, not flops, so correctness was prioritized over micro-optimization.
+
+Driver: [`cpp/predict/predict_cpp.py`](cpp/predict/predict_cpp.py). 31 `gdalnn_conv` invocations (one per conv); maxpool / upsample / concat / residual-add / softmax stay in-process via numpy + rasterio.
+
+### `build_vrt.py` (the VRT path)
+
+[`vrt/build_vrt.py`](vrt/build_vrt.py) emits one VRT XML per conv layer that wraps `<KernelFilteredSource>` per input channel + an `expression` pixel function for the per-output-channel sum + bias + BN + ReLU, then runs `gdal_translate net.vrt out.tif` to materialize the layer in one process. Same architecture flow as the C++ path, just one process per layer using stock GDAL.
 
 ## Results so far
 
