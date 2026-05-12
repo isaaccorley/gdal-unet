@@ -38,12 +38,13 @@ jobs:
           channel-priority: strict
           activate-environment: gdal-conv2d-build
 
-      - name: Install build deps via conda-forge
+      - name: Install build + test deps via conda-forge
         run: |
           conda install -y -c conda-forge \
               cmake ninja \
               libgdal '>=3.11' \
-              llvm-openmp
+              llvm-openmp \
+              numpy rasterio scipy 'pytorch=*=cpu*'
 
       - name: Configure
         run: |
@@ -66,6 +67,7 @@ jobs:
       - name: Per-mode parity tests
         run: |
           export PATH="${{ github.workspace }}/install/bin:$PATH"
+          export PYTHON="$CONDA_PREFIX/bin/python"
           bash cpp/tests/test_modes.sh
 
       - name: Stage release bundle
