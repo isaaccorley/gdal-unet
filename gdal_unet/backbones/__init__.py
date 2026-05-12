@@ -1,15 +1,25 @@
-"""Backbones for gdal-unet. Each module exports a `forward(...)` function."""
+"""Per-backbone encoder modules.
 
-from . import resnet18
+Each module exposes a single function::
 
-REGISTRY = {
-    "unet-resnet18": resnet18.forward,
-}
+    forward(input_tif, state_dict, workdir, weights) -> list[Path]
+
+returning encoder skip features in increasing-stride order (input, stem,
+stage1, stage2, stage3, stage4 for resnet-like; analogous positions for
+mobilenet / efficientnet).
+"""
+
+from . import resnet, mobilenetv2, mobilenetv3, efficientnet  # noqa: F401
 
 
-def get(name: str):
-    if name not in REGISTRY:
-        raise ValueError(
-            f"unknown backbone {name!r}; available: {sorted(REGISTRY)}"
-        )
-    return REGISTRY[name]
+def get_backbone(name: str):
+    name = name.lower()
+    if name.startswith("resnet"):
+        return resnet
+    if name == "mobilenet_v2":
+        return mobilenetv2
+    if name.startswith("mobilenet_v3"):
+        return mobilenetv3
+    if name.startswith("efficientnet"):
+        return efficientnet
+    raise ValueError(f"unknown / unsupported backbone: {name!r}")
