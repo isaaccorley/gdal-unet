@@ -28,13 +28,15 @@ def detect_arch(sd: dict) -> str:
             # logging purposes.
             return "resnet50"
         return "resnet18"
+    if "encoder._conv_stem.weight" in sd:
+        return "efficientnet"
     if "encoder.features.0.0.weight" in sd:
-        # could be mbv2 / mbv3 / efficientnet -- mbv2 has features.{i}.conv.* ;
-        # mbv3 has features.{i}.block.* ; efficientnet uses _blocks (timm).
+        # could be mbv2 / mbv3 -- mbv2 has features.{i}.conv.* ;
+        # mbv3 has features.{i}.block.* .
         if any(k.startswith("encoder.features.1.conv.") for k in sd):
             return "mobilenet_v2"
         if any(k.startswith("encoder.features.1.block.") for k in sd):
-            return "mobilenet_v3"
+            return "mobilenet_v3_large"
     raise ValueError("Could not auto-detect backbone from state_dict keys; "
                      "pass --arch explicitly.")
 

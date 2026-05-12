@@ -30,6 +30,8 @@ from gdal_unet import ops as gops          # noqa: E402
 from gdal_unet.backbones import (          # noqa: E402
     resnet as bb_resnet,
     mobilenetv2 as bb_mbv2,
+    mobilenetv3 as bb_mbv3,
+    efficientnet as bb_eff,
 )
 from gdal_unet.decoders import unet as dec_unet  # noqa: E402
 
@@ -125,6 +127,10 @@ def run_parity(backbone_name: str, *, h: int = 128, w: int = 128,
             bb = bb_resnet
         elif backbone_name == "mobilenet_v2":
             bb = bb_mbv2
+        elif backbone_name.startswith("mobilenet_v3"):
+            bb = bb_mbv3
+        elif backbone_name.startswith("efficientnet"):
+            bb = bb_eff
         else:
             raise ValueError(f"no backbone module for {backbone_name}")
 
@@ -210,7 +216,8 @@ def run_parity(backbone_name: str, *, h: int = 128, w: int = 128,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("backbones", nargs="*",
-                    default=["resnet18", "resnet50", "mobilenet_v2"])
+                    default=["resnet18", "resnet50", "mobilenet_v2",
+                             "efficientnet-b0", "efficientnet-b3"])
     ap.add_argument("--keep-work", action="store_true")
     ap.add_argument("--cos-tol", type=float, default=0.999)
     # 5e-3 is the target Float16 budget for trained models on natural input.
