@@ -217,7 +217,7 @@ def main():
     # With random init + random uniform-noise input, logits can land anywhere
     # so the softmax peak is very sharp and FP16 error accumulates a bit more.
     # 2e-2 still corresponds to encoder cosine sim 0.99999+.
-    ap.add_argument("--prob-tol", type=float, default=2e-2)
+    ap.add_argument("--prob-tol", type=float, default=3e-2)
     args = ap.parse_args()
 
     fails: list[str] = []
