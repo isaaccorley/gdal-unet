@@ -44,7 +44,7 @@ jobs:
               cmake ninja \
               libgdal '>=3.11' \
               llvm-openmp \
-              numpy rasterio scipy 'pytorch=*=cpu*'
+              numpy rasterio scipy pytorch
 
       - name: Configure
         run: |
