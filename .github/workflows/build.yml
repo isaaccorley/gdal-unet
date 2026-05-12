@@ -47,10 +47,15 @@ jobs:
               numpy rasterio scipy pytorch
 
       - name: Configure
+        # Install into $CONDA_PREFIX so @loader_path/../lib (macOS) /
+        # $ORIGIN/../lib (Linux) resolves to conda's libgdal at runtime --
+        # matches how conda-forge will install the package on the end user's
+        # machine.  We copy the binary out of $CONDA_PREFIX/bin into the
+        # release tarball at the Stage step below.
         run: |
           cmake -S cpp -B cpp/build -G Ninja \
               -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install" \
+              -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
               -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
 
       - name: Build
@@ -61,12 +66,11 @@ jobs:
 
       - name: Sanity check
         run: |
-          file "${{ github.workspace }}/install/bin/gdal-conv2d"
-          "${{ github.workspace }}/install/bin/gdal-conv2d" --help
+          file "$CONDA_PREFIX/bin/gdal-conv2d"
+          "$CONDA_PREFIX/bin/gdal-conv2d" --help
 
       - name: Per-mode parity tests
         run: |
-          export PATH="${{ github.workspace }}/install/bin:$PATH"
           export PYTHON="$CONDA_PREFIX/bin/python"
           bash cpp/tests/test_modes.sh
 
@@ -74,8 +78,8 @@ jobs:
         run: |
           STAGE="gdal-conv2d-${{ matrix.os }}-${{ matrix.arch }}"
           mkdir -p "$STAGE"
-          cp install/bin/gdal-conv2d "$STAGE/"
-          cp README.md LICENSE       "$STAGE/" 2>/dev/null || true
+          cp "$CONDA_PREFIX/bin/gdal-conv2d" "$STAGE/"
+          cp README.md LICENSE               "$STAGE/" 2>/dev/null || true
           tar -czf "$STAGE.tar.gz" "$STAGE"
           ls -lh "$STAGE.tar.gz"
 
