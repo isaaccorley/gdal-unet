@@ -1,34 +1,16 @@
-"""Generate per-layer VRTs for the chesapeakersc U-Net and execute them
-with one `gdal_translate` per layer.
+"""Reference: one VRT per conv layer, materialized via gdal_translate.
 
-Goal: shrink the ~2185-subprocess pipeline in predict_gdal.py to ~30 by
-expressing each conv layer (multi-input-channel conv + BN + ReLU fused)
-as a single VRT-derived dataset, then materializing it once.
+Historical -- NOT shipped.  Each conv layer becomes a VRTDerivedRasterBand
+with multiple KernelFilteredSource children combined by an `expression`
+pixel function (sum + BN affine + ReLU).  Reduces predict_gdal.py's ~2185
+subprocesses to ~31 (one gdal_translate per layer + a handful of numpy
+helpers for strided ops).
 
-Strides and 2x upsamples and concats still happen via numpy here, because
-VRT downsample/upsample resamples at pixel *centers*, not pixel corners,
-so they don't match PyTorch's conv2d(stride=2) / Upsample(nearest) sampling
-exactly.
+Strided convs, upsamples, and concats still go through numpy: VRT
+resamples at pixel centers, not corners, so it can't exactly reproduce
+PyTorch's conv2d(stride=2) / Upsample(nearest) sampling.
 
-Layers/conv counts:
-  stem (4->64, 7x7, stride 2)             : 1 conv  +  pad/stride helpers
-  maxpool 3x3 stride 2                    : 0 conv  (numpy)
-  l1.b0  conv1 (64->64), conv2 (64->64)   : 2 convs
-  l1.b1  conv1, conv2                     : 2 convs
-  l2.b0  conv1 (64->128 stride 2), conv2  : 2 convs (+ ds 1x1 stride 2)
-  l2.b1  conv1, conv2                     : 2 convs
-  l3.b0  conv1 (128->256 stride 2), conv2 : 2 convs (+ ds)
-  l3.b1  conv1, conv2                     : 2 convs
-  l4.b0  conv1 (256->512 stride 2), conv2 : 2 convs (+ ds)
-  l4.b1  conv1, conv2                     : 2 convs
-  d0.c1, d0.c2                            : 2 convs   (in 768, out 256)
-  d1.c1, d1.c2                            : 2 convs
-  d2.c1, d2.c2                            : 2 convs
-  d3.c1, d3.c2                            : 2 convs
-  d4.c1, d4.c2                            : 2 convs (no skip)
-  head (16->2)                            : 1 conv
-Total conv layers: 1 + 16 + 10 + 1 = ~28 + 4 downsample 1x1 + ~5 add/relu
-                   = ~30 layer-VRT materializations + a handful of numpy steps.
+Needs the same model_weights.npz that predict_gdal.py expects.
 """
 
 import argparse
@@ -43,11 +25,6 @@ from xml.sax.saxutils import escape
 import numpy as np
 import rasterio
 from rasterio.windows import Window
-
-ENV = "/projects/bgtj/isaaccorley/envs/ftw-tile"
-os.environ["PATH"] = f"{ENV}/bin:" + os.environ.get("PATH", "")
-os.environ["PROJ_DATA"] = f"{ENV}/share/proj"
-os.environ["PROJ_LIB"] = os.environ["PROJ_DATA"]
 
 ROOT = Path(__file__).parent.resolve()
 W = np.load(ROOT / "model_weights.npz")

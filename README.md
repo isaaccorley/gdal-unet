@@ -8,20 +8,20 @@ Reference model:
 [`isaaccorley/chesapeakersc`](https://huggingface.co/isaaccorley/chesapeakersc)
 — `smp.Unet(resnet18, in_channels=4, classes=2)`, 14.3 M params, trained on
 NAIP RGBN for road segmentation. The same architecture pattern (and
-`gdal-unet-export`) works for any conv-based U-Net.
+`gdal-unet`) works for any conv-based U-Net.
 
 ## Two artifacts, two audiences
 
 | Artifact | For | Install |
 |---|---|---|
 | `gdal-conv2d` (C++ binary) | end users running inference | tarball from the [latest release](https://github.com/isaaccorley/gdal-unet/releases/latest); `conda install -c conda-forge gdal-conv2d` is pending ([staged-recipes#33314](https://github.com/conda-forge/staged-recipes/pull/33314)) |
-| `gdal-unet-export` (Python) | model authors converting checkpoints | `pip install git+https://github.com/isaaccorley/gdal-unet.git#subdirectory=export` |
+| `gdal-unet` (Python) | model authors converting checkpoints | `pip install git+https://github.com/isaaccorley/gdal-unet.git#subdirectory=export` |
 
 ## Inference flow
 
 ```bash
 # One-time conversion (requires PyTorch):
-gdal-unet-export model.pt --arch resnet18 -o weights/
+gdal-unet export model.pt --arch resnet18 -o weights/
 
 # weights/ contains:
 #   arch.txt
@@ -66,30 +66,6 @@ input NAIP (4-band uint8)
 All modes write Float16 and preserve CRS+geotransform from the first input.
 Inner conv loops parallelize over output channels via OpenMP.
 
-## Repo layout
-
-```
-cpp/                                 the gdal-conv2d C++ binary
-  src/gdal_conv2d.cpp
-  CMakeLists.txt
-  tests/test_modes.sh                per-mode parity vs numpy/PyTorch refs
-
-export/                              gdal-unet-export Python tool
-  gdal_unet_export/
-    cli.py                           gdal-unet-export model.pt --arch ... -o weights/
-    archs/resnet.py                  forward-graph walker
-    sh_emit.py                       generates predict_<arch>.sh
-
-samples/                             5 NAIP patches + GT masks (regression fixtures)
-conda-recipe/                        conda-forge recipe for gdal-conv2d
-.github/workflows/                   CI matrix + tag-based release
-
-reference/                           historical, NOT shipped (see reference/README.md)
-  predict_gdal.py                    original ~520 s pure-CLI baseline
-  build_vrt.py                       131 s VRT-per-layer path
-  profile_layers.py                  per-stage activation debugger
-```
-
 ## End-to-end regression (sample 1717, chesapeakersc resnet18)
 
 | Pipeline | Wall (16-CPU) | Subprocs | IoU vs GT |
@@ -101,17 +77,6 @@ reference/                           historical, NOT shipped (see reference/READ
 
 All three GDAL-side pipelines match PyTorch bit-close (per-stage cosine
 1.0000, max P(road) diff 2.5e-3 — entirely Float16 rounding).
-
-## How we got to bit-close parity
-
-The first naïve pass collapsed to IoU 0.21 vs PyTorch 0.64.
-`reference/profile_layers.py` dumped per-stage activations and pinpointed two
-boundary issues:
-
-1. **PyTorch zero-pads; `gdal raster neighbors` edge-replicates.** Worst at the 7×7 stem; the wrong edge compounds via every residual skip. Fixed by zero-padding inside `gdal-conv2d` before each conv and cropping the boundary off after.
-2. **Stride-2 alignment.** PyTorch samples at `(0, 0), (0, 2), …`; `gdal raster reproject -r nearest` samples at pixel centers (`(2i+1, 2j+1)`). Over 5 stride-2 stages = 32-pixel global shift at the bottleneck. Fixed by doing the strided sample at corner positions — now built into `gdal-conv2d` (and similarly for maxpool + nearest upsample).
-
-After both fixes, the worst per-stage cosine to PyTorch jumped from 0.29 → 1.0000.
 
 ## Build
 
@@ -138,7 +103,3 @@ CMakeLists handles `@loader_path/../lib` / `$ORIGIN/../lib` RPATH portably.
 | Windows | ❌ | ❌ |
 
 macOS Intel and Windows are dropped from the GitHub Actions matrix (Intel-mac runner queue is multi-hour; Windows needs MSVC + libomp work). conda-forge does build osx-64 on its own infra so an Intel-mac conda install will still work once the conda-forge PR merges. Re-enabling Intel mac in the GH Actions matrix is one-line in `.github/workflows/build.yml`.
-
-## License
-
-MIT. See [`LICENSE`](LICENSE).

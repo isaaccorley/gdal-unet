@@ -47,7 +47,7 @@ about:
 
     Designed to be chained ~30-150 times via a shell script to run a
     full conv-based U-Net forward pass.  See the parent project at
-    https://github.com/isaaccorley/gdal-unet for the gdal-unet-export
+    https://github.com/isaaccorley/gdal-unet for the gdal-unet
     Python tool that generates such scripts from PyTorch checkpoints.
 
     Outputs Float16 GeoTIFFs preserving CRS + geotransform.  Inner conv

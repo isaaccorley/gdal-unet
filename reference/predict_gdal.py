@@ -1,20 +1,20 @@
-"""Run chesapeakersc U-Net (smp.Unet + resnet18, in=4 out=2) entirely via
-`gdal` CLI subprocesses, using the inert weights in model_weights.npz.
+"""Reference: full smp.Unet(resnet18) inference via `gdal raster ...` subprocesses.
 
-This is the deliberately-silly variant: the only actual math runs inside
-`gdal raster neighbors|calc|reproject|stack`.  Python only orchestrates.
+Historical baseline -- NOT shipped.  Kept to document that the entire forward
+pass can be expressed in pure GDAL CLI.  ~2185 subprocesses, ~520 s wall on a
+16-CPU node, IoU 0.6372 vs PyTorch 0.6374 on samples/1717.
 
-Strategy per conv layer (Cout, Cin, kH, kW):
-  - For each input channel ic, run ONE `gdal raster neighbors --band ic+1`
-    with all Cout kernels => produces a Cout-band intermediate raster.
-  - Linearly accumulate the Cin intermediates with band-wise add `calc`s.
-  - Final fused BN+ReLU (or bias) in one `calc` with Cout expressions.
-  - Stride 2 -> follow with `reproject --size W/2,H/2 -r nearest`.
+Per conv layer (Cout, Cin, kH, kW):
+  for each input channel, neighbors --band N --kernel * Cout -> Cout-band tif
+  accumulate Cin intermediates via band-wise add calcs
+  fuse BN + ReLU into the last calc
+  stride 2 follows with reproject --size W/2,H/2 -r nearest
 
-Strided convs use "full-res conv + nearest downsample" which is
-mathematically equivalent to stride-2 conv (alignment within half a pixel).
+Needs an old-style model_weights.npz (no longer in the repo) -- regenerate
+with the export logic in export/gdal_unet/archs/resnet.py if you want
+to actually run this.
 
-Usage:  predict_gdal.py <input_naip_512.tif> [<output_probs.tif>]
+Usage:  predict_gdal.py <input.tif> [<output.tif>]
 """
 
 import argparse
@@ -32,16 +32,9 @@ import numpy as np
 import rasterio
 from rasterio.windows import Window
 
-ENV = "/projects/bgtj/isaaccorley/envs/ftw-tile"
-os.environ["PATH"] = f"{ENV}/bin:" + os.environ.get("PATH", "")
-os.environ["PROJ_DATA"] = f"{ENV}/share/proj"
-os.environ["PROJ_LIB"] = os.environ["PROJ_DATA"]
-
 ROOT = Path(__file__).parent.resolve()
 W = np.load(ROOT / "model_weights.npz")
 
-# Parallelism: ThreadPool fan-out for independent gdal subprocesses.
-# 8 workers × ~4 internal threads/process is plenty for our 64-CPU box.
 NUM_WORKERS = 8
 POOL = ThreadPoolExecutor(max_workers=NUM_WORKERS)
 

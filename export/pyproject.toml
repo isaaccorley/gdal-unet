@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gdal-unet-export"
+name = "gdal-unet"
 version = "0.1.0"
 description = "Export PyTorch U-Net weights + emit shell predict pipeline for gdal-conv2d."
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-gdal-unet-export = "gdal_unet_export.cli:main"
+gdal-unet = "gdal_unet.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["gdal_unet_export*"]
+include = ["gdal_unet*"]
