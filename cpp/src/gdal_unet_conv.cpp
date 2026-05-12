@@ -1,4 +1,4 @@
-// gdalnn_conv: single-process conv+BN+ReLU+(stride/padding) layer using GDAL I/O.
+// gdal-unet-conv: single-process conv+BN+ReLU+(stride/padding) layer using GDAL I/O.
 //
 // Replaces the chunked-diagonal `gdal raster pipeline | calc` cascade that
 // fires ~70 subprocesses per conv layer. Naive triple-loop conv, OpenMP over
@@ -82,7 +82,7 @@ struct Args {
 };
 
 static void usage() {
-    std::cerr << "Usage: gdalnn_conv --in <in.tif> --kernel <k.bin> "
+    std::cerr << "Usage: gdal-unet-conv --in <in.tif> --kernel <k.bin> "
                  "--kernel-shape Cout,Cin,kH,kW [--bn-a a.bin --bn-b b.bin] "
                  "[--bias bias.bin] [--relu] [--stride 1|2] [--padding P] "
                  "--out <out.tif> [--threads N] [--co KEY=VAL ...]\n";

@@ -15,6 +15,8 @@ source:
 build:
   number: 0
   skip: true  # [win]   # native Windows build needs MSVC + libomp; defer
+  entry_points:
+    - gdal-unet = gdal_unet.cli:main
 
 requirements:
   build:
@@ -23,6 +25,10 @@ requirements:
     - ninja
     - make  # [unix]
   host:
+    - python >=3.10
+    - pip
+    - setuptools >=64
+    - wheel
     - libgdal >=3.11
     - llvm-openmp  # [osx]
     - libgomp      # [linux]
@@ -35,12 +41,13 @@ requirements:
     - rasterio
 
 test:
-  commands:
-    - gdalnn_conv --help
   imports:
-    # the python orchestrator lives next to the binary; conda install puts it
-    # on PATH as predict_cpp.py
-    - {{ "True" }}
+    - gdal_unet
+    - gdal_unet.backbones.resnet18
+  commands:
+    - gdal-unet-conv --help
+    - gdal-unet --help
+    - gdal-unet predict --help
 
 about:
   home: https://github.com/isaaccorley/gdal-unet
@@ -51,7 +58,7 @@ about:
   description: |
     gdal-unet runs a conv-based U-Net forward pass through GDAL CLI
     operations (neighbors, calc, reproject, stack) plus a small C++ helper
-    (gdalnn_conv) for the per-layer multi-channel conv + BN + ReLU.
+    (gdal-unet-conv) for the per-layer multi-channel conv + BN + ReLU.
     Loads pretrained PyTorch weights as a .npz file.  Output is a 2-band
     Float16 probability GeoTIFF that matches the PyTorch reference
     bit-close (per-stage cosine 1.0000, IoU within 0.0002).

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Build + install the C++ binary as $PREFIX/bin/gdal-unet-conv
 mkdir -p cpp/build
 cd cpp/build
 cmake .. \
@@ -10,7 +11,8 @@ cmake .. \
     -DCMAKE_PREFIX_PATH="$PREFIX"
 cmake --build . -j "${CPU_COUNT}"
 cmake --install .
+cd "$SRC_DIR"
 
-# Install the Python orchestrator alongside the binary so users have a one-step
-# "conda install gdal-unet && python -m predict_cpp …" path.
-install -m 0644 ../predict/predict_cpp.py "$PREFIX/bin/predict_cpp.py"
+# Install the Python package; provides the `gdal-unet` console script via
+# the entry-point declared in pyproject.toml.
+"$PYTHON" -m pip install . --no-deps --no-build-isolation -vv

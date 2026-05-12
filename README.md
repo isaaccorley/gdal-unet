@@ -6,9 +6,9 @@ Reference model: [`isaaccorley/chesapeakersc`](https://huggingface.co/isaaccorle
 
 ## Three back-ends, all bit-close to PyTorch
 
-| | `predict_gdal.py` | `vrt/build_vrt.py` | `cpp/predict_cpp.py` |
+| | `predict_gdal.py` | `vrt/build_vrt.py` | `gdal-unet predict` |
 |---|---|---|---|
-| **Math runtime** | many `gdal raster pipeline / calc` per chunk | one `gdal_translate` per layer (VRT pixel functions) | `gdalnn_conv` (custom C++ binary) per layer |
+| **Math runtime** | many `gdal raster pipeline / calc` per chunk | one `gdal_translate` per layer (VRT pixel functions) | `gdal-unet-conv` (custom C++ binary) per layer |
 | **Subprocesses / forward** | ~2185 | 31 | **31** |
 | **Wall on 16-CPU node** | ~520 s | 131 s | **7.5 s** |
 | **Peak RSS** | many GB on disk | 672 MB | **156 MB** |
@@ -20,6 +20,13 @@ PyTorch reference IoU on the same input: 0.6374. The C++ path is **~70× faster*
 ## What's here
 
 ```
+gdal_unet/                       Python package (user-facing CLI)
+  cli.py                         `gdal-unet` console entry point
+  conv_runner.py                 shell wrapper around the C++ binary
+  ops.py                         numpy/rasterio helpers (pad, pool, upsample, ...)
+  backbones/resnet18.py          smp.Unet(resnet18) forward pass driver
+pyproject.toml                   declares the `gdal-unet` entry-point
+
 predict_gdal.py      pure-CLI chunked-diagonal forward pass     (the baseline)
 export_weights.py    pull weights from a PyTorch .pt -> .npz (Float16, BN folded)
 model_weights.npz    28 MB pretrained weights (chesapeakersc)
@@ -30,9 +37,9 @@ vrt/
   build_vrt.py       generate one VRT per conv layer; gdal_translate per layer
 
 cpp/
-  src/gdalnn_conv.cpp     one conv-BN-ReLU layer, OpenMP-parallel, GDAL I/O
+  src/gdal_unet_conv.cpp  one conv-BN-ReLU layer, OpenMP-parallel, GDAL I/O
   CMakeLists.txt          portable build (Linux, macOS arm64/x86_64)
-  predict/predict_cpp.py  driver — 31 gdalnn_conv calls + numpy for the rest
+                          installs the `gdal-unet-conv` binary
 
 .github/workflows/build.yml   CI: build binaries for linux-{x86_64,arm64}, macos-{arm64,x86_64}
 conda-recipe/                 conda-forge recipe (see "Deployment" below)
@@ -68,7 +75,7 @@ input NAIP (4-band uint8)
 - One VRT XML per conv layer: `<VRTDerivedRasterBand>` with `<PixelFunctionType>expression</PixelFunctionType>` (built-in muparser, no Python pixel functions needed) wrapping Cin `<KernelFilteredSource>` children. The expression is `bn_a * (B1 + B2 + ... + BCin) + bn_b`, with `max(0, …)` for ReLU.
 - `gdal_translate` materializes one layer per call. Strides / maxpool / upsample / concat use the same numpy helpers as the pure-CLI variant.
 
-### C++ binary (`cpp/src/gdalnn_conv.cpp`)
+### C++ binary (`cpp/src/gdal_unet_conv.cpp`)
 
 - 330 lines, OpenMP over output channels, scalar inner loops.
 - Reads input via GDAL into a float32 buffer, kernel/BN/bias from raw `.bin` files (Float16), zero-pads, conv-BN-ReLU, optional stride-2 sampling, writes Float16 output preserving CRS/geotransform.
@@ -86,10 +93,16 @@ python predict_gdal.py samples/1717_image.tif samples/1717_probs.tif
 # Option 2 — VRT per layer (4× faster, still no custom code)
 python vrt/build_vrt.py samples/1717_image.tif samples/1717_probs.tif
 
-# Option 3 — C++ binary (70× faster)
+# Option 3 — C++ binary (70× faster, via the gdal-unet CLI)
 cmake -S cpp -B cpp/build && cmake --build cpp/build -j
-python cpp/predict/predict_cpp.py samples/1717_image.tif samples/1717_probs.tif
+pip install -e .
+gdal-unet predict samples/1717_image.tif samples/1717_probs.tif \
+    --arch unet-resnet18 --weights model_weights.npz
 ```
+
+The `gdal-unet` CLI is a thin Python orchestrator; under the hood it
+fires one `gdal-unet-conv` subprocess per conv layer (~31 calls total).
+You can point it at an alternate binary with `--binary` or `$GDAL_UNET_CONV`.
 
 ## Deployment
 
@@ -107,12 +120,14 @@ Windows is unsupported by default — the geospatial-ML-via-CLI audience overlap
 
 ### Binary releases (GitHub Actions)
 
-CI builds `gdalnn_conv` for the four supported platforms on every push and tag. See `.github/workflows/build.yml`. Tag-triggered runs (`v*`) attach the tarballs to a GitHub Release. End users download the right tarball and run:
+CI builds `gdal-unet-conv` plus the Python package for the four supported platforms on every push and tag. See `.github/workflows/build.yml`. Tag-triggered runs (`v*`) attach the tarballs to a GitHub Release. End users download the right tarball and run:
 
 ```bash
-tar -xzf gdal-nn-macos-arm64.tar.gz
+tar -xzf gdal-unet-macos-arm64.tar.gz
 cd gdal-unet-macos-arm64
-./gdalnn_conv --help
+./gdal-unet-conv --help
+pip install -e .                                  # installs the `gdal-unet` console script
+gdal-unet predict in.tif out.tif --weights model_weights.npz
 ```
 
 The binary RPATH is set to find `libgdal` next to it (`@loader_path/../lib` on macOS, `$ORIGIN/../lib` on Linux), so the user only needs GDAL installed on their system in a standard location.
