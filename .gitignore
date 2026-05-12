@@ -36,3 +36,11 @@ install/
 
 # OS
 .DS_Store
+
+# weights live on HuggingFace, not in git
+model_weights.npz
+*.pt
+
+# override global *.tif rule for our committed sample images
+!samples/*_image.tif
+!samples/*_mask.tif
