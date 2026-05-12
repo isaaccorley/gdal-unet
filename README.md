@@ -14,8 +14,8 @@ NAIP RGBN for road segmentation. The same architecture pattern (and
 
 | Artifact | For | Install |
 |---|---|---|
-| `gdal-conv2d` (C++ binary) | end users running inference | `conda install -c conda-forge gdal-conv2d` |
-| `gdal-unet-export` (Python) | model authors converting checkpoints | `pip install gdal-unet-export` *(when published)* or `pip install git+https://github.com/isaaccorley/gdal-unet.git#subdirectory=export` |
+| `gdal-conv2d` (C++ binary) | end users running inference | tarball from the [latest release](https://github.com/isaaccorley/gdal-unet/releases/latest); `conda install -c conda-forge gdal-conv2d` is pending ([staged-recipes#33314](https://github.com/conda-forge/staged-recipes/pull/33314)) |
+| `gdal-unet-export` (Python) | model authors converting checkpoints | `pip install git+https://github.com/isaaccorley/gdal-unet.git#subdirectory=export` |
 
 ## Inference flow
 
@@ -129,17 +129,15 @@ CMakeLists handles `@loader_path/../lib` / `$ORIGIN/../lib` RPATH portably.
 
 ## Supported platforms
 
-| Platform | Binary | Conda package |
+| Platform | CI-built tarball | conda-forge build |
 |---|---|---|
 | Linux x86_64 | ✅ | ✅ |
-| Linux arm64 | ✅ | ✅ |
+| Linux arm64 | ✅ | ✅ (via osx/linux build) |
 | macOS arm64 (Apple Silicon) | ✅ | ✅ |
-| macOS x86_64 (Intel) | ✅ | ✅ |
+| macOS x86_64 (Intel) | ❌ | ✅ |
 | Windows | ❌ | ❌ |
 
-Windows unsupported by default. To add: drop `windows-latest` into
-`.github/workflows/build.yml`'s matrix and remove `skip: true  # [win]`
-from `conda-recipe/meta.yaml`.
+macOS Intel and Windows are dropped from the GitHub Actions matrix (Intel-mac runner queue is multi-hour; Windows needs MSVC + libomp work). conda-forge does build osx-64 on its own infra so an Intel-mac conda install will still work once the conda-forge PR merges. Re-enabling Intel mac in the GH Actions matrix is one-line in `.github/workflows/build.yml`.
 
 ## License
 
