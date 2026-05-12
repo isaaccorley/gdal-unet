@@ -34,14 +34,16 @@ jobs:
           miniforge-version: latest
           channels: conda-forge
           channel-priority: strict
-          activate-environment: gdalnn-build
+          activate-environment: gdal-unet-build
 
       - name: Install build deps via conda-forge
         run: |
           conda install -y -c conda-forge \
               cmake ninja \
               libgdal '>=3.11' \
-              llvm-openmp
+              llvm-openmp \
+              python '>=3.10' pip \
+              numpy rasterio
 
       - name: Configure
         run: |
@@ -60,23 +62,32 @@ jobs:
 
       - name: Sanity-check binary
         run: |
-          file "${{ github.workspace }}/install/bin/gdalnn_conv"
-          "${{ github.workspace }}/install/bin/gdalnn_conv" --help 2>&1 || true
+          file "${{ github.workspace }}/install/bin/gdal-unet-conv"
+          "${{ github.workspace }}/install/bin/gdal-unet-conv" --help 2>&1 || true
+
+      - name: Install Python package (editable)
+        run: pip install -e .
+
+      - name: Sanity-check Python CLI
+        run: |
+          gdal-unet --help
+          gdal-unet predict --help
 
       - name: Stage release bundle
         run: |
-          STAGE="gdal-nn-${{ matrix.os }}-${{ matrix.arch }}"
+          STAGE="gdal-unet-${{ matrix.os }}-${{ matrix.arch }}"
           mkdir -p "$STAGE"
-          cp install/bin/gdalnn_conv     "$STAGE/"
-          cp install/bin/predict_cpp.py  "$STAGE/"
+          cp install/bin/gdal-unet-conv "$STAGE/"
+          cp -r gdal_unet                "$STAGE/"
+          cp pyproject.toml              "$STAGE/"
           cp README.md LICENSE           "$STAGE/" 2>/dev/null || true
           tar -czf "$STAGE.tar.gz" "$STAGE"
           ls -lh "$STAGE.tar.gz"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: gdal-nn-${{ matrix.os }}-${{ matrix.arch }}
-          path: gdal-nn-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+          name: gdal-unet-${{ matrix.os }}-${{ matrix.arch }}
+          path: gdal-unet-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
 
   release:
     needs: build
@@ -94,5 +105,5 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/gdal-nn-*.tar.gz
+          files: dist/gdal-unet-*.tar.gz
           generate_release_notes: true

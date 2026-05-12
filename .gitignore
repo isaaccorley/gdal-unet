@@ -26,6 +26,13 @@ __pycache__/
 *.pyc
 .venv/
 .ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+
+# C++ build
+cpp/build/
+install/
 
 # OS
 .DS_Store
