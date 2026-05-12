@@ -1,6 +1,6 @@
 """Shared low-level ops for the gdal-unet runtime.
 
-Each conv layer is one ``gdalnn_conv`` subprocess.  BN folding is done in
+Each conv layer is one ``gdal-conv2d`` subprocess.  BN folding is done in
 Python at call-time (so a model can be shipped as a vanilla ``.pt``).  All
 other tensor-shape rearrangements (concat, residual add, upsample, SE) run as
 small numpy ops via rasterio: cheap relative to the conv itself.
@@ -16,30 +16,29 @@ import rasterio
 
 
 # ---------- environment ----------
-# Locate the `gdal-unet-conv` binary.  Resolution order:
-#   1. $GDAL_UNET_CONV  (explicit override)
-#   2. ./cpp/build/gdal-unet-conv  (developer build next to the source tree)
+# Locate the `gdal-conv2d` binary.  Resolution order:
+#   1. $GDAL_CONV2D  (explicit override)
+#   2. ./cpp/build/gdal-conv2d  (developer build next to the source tree)
 #   3. PATH lookup (conda / homebrew / system install)
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def _resolve_binary() -> str:
-    env = os.environ.get("GDAL_UNET_CONV")
+    env = os.environ.get("GDAL_CONV2D")
     if env:
         return env
-    cand = ROOT / "cpp" / "build" / "gdal-unet-conv"
+    cand = ROOT / "cpp" / "build" / "gdal-conv2d"
     if cand.exists():
         return str(cand)
     from shutil import which
-    found = which("gdal-unet-conv")
+    found = which("gdal-conv2d")
     if found:
         return found
-    return "gdal-unet-conv"  # fall through; subprocess will error if missing
+    return "gdal-conv2d"  # fall through; subprocess will error if missing
 
 
-GDALNN = _resolve_binary()
-NTH = int(os.environ.get("GDAL_UNET_THREADS",
-                         os.environ.get("GDALNN_THREADS", "16")))
+GDAL_CONV2D_BIN = _resolve_binary()
+NTH = int(os.environ.get("GDAL_CONV2D_THREADS", "16"))
 
 # HPC fallback: if a known conda-env libdir is present, prepend so the
 # binary's RPATH doesn't have to fight a torchgeo / ftw-tile libstdc++ clash.
@@ -132,7 +131,7 @@ def conv(
     weights: WeightDir,
     key: str,
 ):
-    """Run one conv (+ optional BN-affine + activation) via gdalnn_conv.
+    """Run one conv (+ optional BN-affine + activation) via gdal-conv2d.
 
     ``weight`` is the raw conv kernel from the state_dict.  Shape:
       - normal conv:    (Cout, Cin, kH, kW)
@@ -153,7 +152,7 @@ def conv(
         padding = kH // 2
 
     args = [
-        GDALNN,
+        GDAL_CONV2D_BIN,
         "--in", str(in_tif),
         "--kernel", str(kernel_path),
         "--kernel-shape", kernel_shape,
@@ -336,7 +335,7 @@ def se_block(in_tif: Path, out_tif: Path, *,
     3. 1x1 conv w2 (C, Cmid) + bias + sigmoid
     4. Per-channel scale: y = x * gate[:, None, None]
 
-    Implemented entirely in numpy here (no gdalnn_conv subprocesses needed --
+    Implemented entirely in numpy here (no gdal-conv2d subprocesses needed --
     the spatial size after global pool is 1x1, so the "conv" is just a matmul).
     """
     a, p = read(in_tif)

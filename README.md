@@ -63,7 +63,7 @@ Reference model: [`isaaccorley/chesapeakersc`](https://huggingface.co/isaaccorle
 
 | | `predict_gdal.py` | `vrt/build_vrt.py` | `gdal-unet predict` |
 |---|---|---|---|
-| **Math runtime** | many `gdal raster pipeline / calc` per chunk | one `gdal_translate` per layer (VRT pixel functions) | `gdal-unet-conv` (custom C++ binary) per layer |
+| **Math runtime** | many `gdal raster pipeline / calc` per chunk | one `gdal_translate` per layer (VRT pixel functions) | `gdal-conv2d` (custom C++ binary) per layer |
 | **Subprocesses / forward** | ~2185 | 31 | **31** |
 | **Wall on 16-CPU node** | ~520 s | 131 s | **7.5 s** |
 | **Peak RSS** | many GB on disk | 672 MB | **156 MB** |
@@ -92,9 +92,9 @@ vrt/
   build_vrt.py       generate one VRT per conv layer; gdal_translate per layer
 
 cpp/
-  src/gdal_unet_conv.cpp  one conv-BN-ReLU layer, OpenMP-parallel, GDAL I/O
+  src/gdal_conv2d.cpp  one conv-BN-ReLU layer, OpenMP-parallel, GDAL I/O
   CMakeLists.txt          portable build (Linux, macOS arm64/x86_64)
-                          installs the `gdal-unet-conv` binary
+                          installs the `gdal-conv2d` binary
 
 .github/workflows/build.yml   CI: build binaries for linux-{x86_64,arm64}, macos-{arm64,x86_64}
 conda-recipe/                 conda-forge recipe (see "Deployment" below)
@@ -130,7 +130,7 @@ input NAIP (4-band uint8)
 - One VRT XML per conv layer: `<VRTDerivedRasterBand>` with `<PixelFunctionType>expression</PixelFunctionType>` (built-in muparser, no Python pixel functions needed) wrapping Cin `<KernelFilteredSource>` children. The expression is `bn_a * (B1 + B2 + ... + BCin) + bn_b`, with `max(0, …)` for ReLU.
 - `gdal_translate` materializes one layer per call. Strides / maxpool / upsample / concat use the same numpy helpers as the pure-CLI variant.
 
-### C++ binary (`cpp/src/gdal_unet_conv.cpp`)
+### C++ binary (`cpp/src/gdal_conv2d.cpp`)
 
 - 330 lines, OpenMP over output channels, scalar inner loops.
 - Reads input via GDAL into a float32 buffer, kernel/BN/bias from raw `.bin` files (Float16), zero-pads, conv-BN-ReLU, optional stride-2 sampling, writes Float16 output preserving CRS/geotransform.
@@ -156,8 +156,8 @@ gdal-unet predict samples/1717_image.tif samples/1717_probs.tif \
 ```
 
 The `gdal-unet` CLI is a thin Python orchestrator; under the hood it
-fires one `gdal-unet-conv` subprocess per conv layer (~31 calls total).
-You can point it at an alternate binary with `--binary` or `$GDAL_UNET_CONV`.
+fires one `gdal-conv2d` subprocess per conv layer (~31 calls total).
+You can point it at an alternate binary with `--binary` or `$GDAL_CONV2D`.
 
 ## Deployment
 
@@ -175,12 +175,12 @@ Windows is unsupported by default — the geospatial-ML-via-CLI audience overlap
 
 ### Binary releases (GitHub Actions)
 
-CI builds `gdal-unet-conv` plus the Python package for the four supported platforms on every push and tag. See `.github/workflows/build.yml`. Tag-triggered runs (`v*`) attach the tarballs to a GitHub Release. End users download the right tarball and run:
+CI builds `gdal-conv2d` plus the Python package for the four supported platforms on every push and tag. See `.github/workflows/build.yml`. Tag-triggered runs (`v*`) attach the tarballs to a GitHub Release. End users download the right tarball and run:
 
 ```bash
 tar -xzf gdal-unet-macos-arm64.tar.gz
 cd gdal-unet-macos-arm64
-./gdal-unet-conv --help
+./gdal-conv2d --help
 pip install -e .                                  # installs the `gdal-unet` console script
 gdal-unet predict in.tif out.tif --weights model_weights.npz
 ```

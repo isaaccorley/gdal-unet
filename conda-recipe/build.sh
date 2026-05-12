@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build + install the C++ binary as $PREFIX/bin/gdal-unet-conv
+# Build + install the C++ binary as $PREFIX/bin/gdal-conv2d
 mkdir -p cpp/build
 cd cpp/build
 cmake .. \

@@ -1,5 +1,5 @@
 """End-to-end predict: load a PyTorch ``.pt`` state_dict, run encoder + decoder
-+ head via gdalnn_conv subprocesses, write a 2-band Float16 probabilities tif.
++ head via gdal-conv2d subprocesses, write a 2-band Float16 probabilities tif.
 
 Architecture is auto-detected from state_dict keys (or via ``--arch``):
   - ``encoder.conv1.weight`` shape (?, 4, 7, 7) -> resnet*

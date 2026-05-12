@@ -62,8 +62,8 @@ jobs:
 
       - name: Sanity-check binary
         run: |
-          file "${{ github.workspace }}/install/bin/gdal-unet-conv"
-          "${{ github.workspace }}/install/bin/gdal-unet-conv" --help 2>&1 || true
+          file "${{ github.workspace }}/install/bin/gdal-conv2d"
+          "${{ github.workspace }}/install/bin/gdal-conv2d" --help 2>&1 || true
 
       - name: Install Python package (editable)
         run: pip install -e .
@@ -77,7 +77,7 @@ jobs:
         run: |
           STAGE="gdal-unet-${{ matrix.os }}-${{ matrix.arch }}"
           mkdir -p "$STAGE"
-          cp install/bin/gdal-unet-conv "$STAGE/"
+          cp install/bin/gdal-conv2d "$STAGE/"
           cp -r gdal_unet                "$STAGE/"
           cp pyproject.toml              "$STAGE/"
           cp README.md LICENSE           "$STAGE/" 2>/dev/null || true
