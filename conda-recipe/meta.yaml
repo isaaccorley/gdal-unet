@@ -1,5 +1,5 @@
 {% set name = "gdal-conv2d" %}
-{% set version = "0.1.0" %}
+{% set version = "0.2.0" %}
 
 package:
   name: {{ name|lower }}
@@ -22,10 +22,12 @@ requirements:
     - make  # [unix]
   host:
     - libgdal >=3.11
+    - onednn >=3.4
     - llvm-openmp  # [osx]
     - libgomp      # [linux]
   run:
     - libgdal >=3.11
+    - onednn >=3.4
     - llvm-openmp  # [osx]
     - libgomp      # [linux]
 

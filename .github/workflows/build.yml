@@ -45,6 +45,7 @@ jobs:
           conda install -y -c conda-forge \
               cmake ninja \
               'libgdal>=3.11' \
+              'onednn>=3.4' \
               llvm-openmp \
               numpy rasterio scipy pytorch
 

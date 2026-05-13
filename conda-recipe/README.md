@@ -32,6 +32,8 @@ conda install -c isaaccorley -c conda-forge gdal-conv2d
 
 3. Push a `v*` tag, or run the workflow manually with `upload: true`.
 
+`recipe.yaml` pulls sources via `source.git` + `source.tag`, so the version bump in `recipe.yaml`/`meta.yaml` plus the matching `vX.Y.Z` git tag is the only thing the release flow needs — no separate sha256 update step.
+
 ### Local dry-run
 
 Build only, no upload:

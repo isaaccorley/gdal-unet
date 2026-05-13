@@ -17,8 +17,22 @@ find_package(GDAL 3.11 REQUIRED)
 # and the gcc/Linux case transparently as long as the headers are findable.
 find_package(OpenMP REQUIRED)
 
-add_executable(gdal-conv2d src/gdal_conv2d.cpp)
-target_link_libraries(gdal-conv2d PRIVATE GDAL::GDAL OpenMP::OpenMP_CXX)
+# oneDNN (DNNL) for fast conv kernels (im2col+GEMM, Winograd, fused post-ops).
+# conda-forge ships the package as `onednn`; the CMake config exports the
+# `DNNL::dnnl` imported target.
+find_package(dnnl REQUIRED CONFIG)
+
+add_executable(gdal-conv2d
+  src/gdal_conv2d.cpp
+  src/conv_dnnl.cpp
+  src/ops_stream.cpp
+)
+target_include_directories(gdal-conv2d PRIVATE src)
+target_link_libraries(gdal-conv2d PRIVATE
+  GDAL::GDAL
+  OpenMP::OpenMP_CXX
+  DNNL::dnnl
+)
 target_compile_options(gdal-conv2d PRIVATE -O3 -Wall)
 
 # Portable RPATH so the binary finds libgdal next to it after install.

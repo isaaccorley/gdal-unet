@@ -2,18 +2,20 @@ schema_version: 1
 
 context:
   name: gdal-conv2d
-  version: "0.1.0"
+  version: "0.2.0"
 
 package:
   name: ${{ name|lower }}
   version: ${{ version }}
 
+# Source from the git tag — no sha256 needed. The tag must exist before the
+# rattler-build job runs (it always does: this workflow only fires on tag push).
 source:
-  url: https://github.com/isaaccorley/gdal-unet/archive/refs/tags/v${{ version }}.tar.gz
-  sha256: e801ab8f41551fee7b51188ba06d62c3018ce298fa05c99cfb00c0e7fab19268
+  git: https://github.com/isaaccorley/gdal-unet.git
+  tag: v${{ version }}
 
 build:
-  number: 1
+  number: 0
   skip: win
 
 requirements:
@@ -33,12 +35,14 @@ requirements:
       then: make
   host:
     - libgdal >=3.11
+    - onednn >=3.4
     - if: osx
       then: llvm-openmp
     - if: linux
       then: libgomp
   run:
     - libgdal >=3.11
+    - onednn >=3.4
     - if: osx
       then: llvm-openmp
     - if: linux
