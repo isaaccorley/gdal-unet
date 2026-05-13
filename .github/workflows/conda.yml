@@ -30,8 +30,12 @@ jobs:
         with:
           recipe-path: conda-recipe/recipe.yaml
           build-args: --channel conda-forge
-        # The action auto-uploads built artifacts under a per-platform name;
-        # no separate actions/upload-artifact step is needed (it would 409).
+          # Disable the action's auto-upload: it uses a shared artifact name
+          # across the matrix and 409s on parallel runs. We don't need
+          # workflow-artifact uploads anyway — the real publish is to
+          # anaconda.org, and built .conda files stay in output/ for the
+          # subsequent step in this same job.
+          upload-artifact: false
 
       - name: Upload to anaconda.org/isaaccorley
         if: startsWith(github.ref, 'refs/tags/v') || inputs.upload
@@ -42,14 +46,15 @@ jobs:
             echo "::error::ANACONDA_TOKEN secret is not set. See conda-recipe/README.md."
             exit 1
           fi
-          shopt -s globstar nullglob
-          uploaded=0
-          for f in output/**/*.conda output/**/*.tar.bz2; do
+          # macOS runners ship bash 3.2 (no globstar, no mapfile), so use find
+          # with a null-delimited while-read loop that works on every runner.
+          count=0
+          while IFS= read -r -d '' f; do
             echo ">> uploading $f"
             rattler-build upload anaconda --owner isaaccorley --force "$f"
-            uploaded=$((uploaded + 1))
-          done
-          if [ "$uploaded" -eq 0 ]; then
-            echo "::error::no built artifacts found in output/"
+            count=$((count + 1))
+          done < <(find output -type f \( -name '*.conda' -o -name '*.tar.bz2' \) -print0)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no built artifacts found under output/"
             exit 1
           fi
