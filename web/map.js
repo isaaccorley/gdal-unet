@@ -161,6 +161,15 @@ export function setOverlay(layerDef, viewDef) {
         "raster-opacity": 0,
         "raster-opacity-transition": { duration: CROSSFADE_MS },
         "raster-fade-duration": 0,
+        // Pin overlays to nearest-neighbor sampling. MapLibre's default
+        // "linear" anchors its 2x2 interpolation kernel on source-pixel
+        // CENTERS. When overlays have a coarser native resolution than the
+        // NAIP base, the kernel's effective grid phase differs per layer
+        // and the eye reads it as a sub-pixel drift between the two —
+        // even though every layer's geotransform is correct. nearest
+        // shows true source cells, which makes alignment visually
+        // verifiable.
+        "raster-resampling": "nearest",
       },
     });
   }
@@ -244,6 +253,7 @@ export function preloadOverlay(layerDef, viewDef) {
       "raster-opacity": 0,
       "raster-opacity-transition": { duration: CROSSFADE_MS },
       "raster-fade-duration": 0,
+      "raster-resampling": "nearest",
     },
   });
 
