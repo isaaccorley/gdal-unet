@@ -13,6 +13,21 @@ samples/*_probs*
 results.png
 ref_probs.npy
 
+# Demo artifacts (scripts/run_demo.sh outputs)
+naip_md_*.tif
+naip_rgb.vrt
+pytorch_probs.tif
+pytorch_class.tif
+gdal_class.tif
+classification_rgba.tif
+intermediate_output/
+intermediate_visuals/
+weights/
+web/tiles/
+web/tiles/intermediate/
+web/bounds.json
+web/layers.json
+
 # Big originals (use HF download)
 unet-resnet18.pt
 model-ep-torch280-cu126.pt2
@@ -44,3 +59,4 @@ model_weights.npz
 # override global *.tif rule for our committed sample images
 !samples/*_image.tif
 !samples/*_mask.tif
+cpp_native/build/

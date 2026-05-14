@@ -92,6 +92,51 @@ bash cpp/tests/test_modes.sh         # per-mode parity vs numpy/PyTorch
 macOS: `brew install libomp` (or `conda install libomp`) first.
 CMakeLists handles `@loader_path/../lib` / `$ORIGIN/../lib` RPATH portably.
 
+## Demo (web viewer)
+
+The `web/` directory has a MapLibre-based viewer that overlays the road
+classification (and optionally every U-Net intermediate stage) on the NAIP
+basemap. One driver script runs the full pipeline end to end, idempotently —
+each step skips work whose outputs already exist.
+
+```bash
+# basic: NAIP + classification only
+bash scripts/run_demo.sh
+
+# full: also renders + tiles all 53 intermediate U-Net stages (~15–20 min)
+bash scripts/run_demo.sh --with-intermediates
+
+# or just the intermediate viewer (assumes run_demo.sh already ran):
+bash scripts/build_intermediate_viewer.sh
+```
+
+What each pipeline step does:
+
+| Step | Script | Output |
+|---|---|---|
+| 1. Download NAIP crop | `scripts/download_naip.py` | `naip_md_4096.tif` |
+| 2. PyTorch reference inference | `scripts/run_pytorch.py` | `pytorch_{probs,class}.tif` |
+| 3. Export weights | `gdal-unet export` | `weights/` |
+| 4. `gdal-conv2d` inference (all 53 stages) | `weights/predict_resnet18.sh` | `intermediate_output/*.tif` |
+| 5. Argmax → class raster | `scripts/argmax_class.py` | `gdal_class.tif` |
+| 6. Compare PyTorch vs gdal | `scripts/compare.py` | stdout report |
+| 7. Colormap class raster | `gdaldem color-relief` | `classification_rgba.tif` |
+| 8. Tile NAIP RGB base | `gdal raster tile` | `web/tiles/naip/` |
+| 9. Tile classification overlay | `gdal raster tile` | `web/tiles/classification/` |
+| 10. Render intermediates (PCA-RGB + top-8 channel heatmaps per stage) | `scripts/render_intermediate.py` | `intermediate_visuals/` |
+| 11. Tile intermediates (parallel xargs) | `scripts/tile_intermediate.sh` | `web/tiles/intermediate/` |
+| 12. Build layer manifest | `scripts/build_layers_manifest.py` | `web/layers.json` |
+
+To serve:
+
+```bash
+python -m http.server 8000   # from repo root
+# open http://localhost:8000/web/
+```
+
+See [`web/README.md`](web/README.md) for the viewer UI, per-channel scrubber,
+keyboard navigation, and how to add custom overlays.
+
 ## Supported platforms
 
 | Platform | CI-built tarball | conda-forge build |
