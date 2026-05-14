@@ -195,7 +195,7 @@ int run_conv(const Args& a) {
     }
 
     double gt_out[6];
-    gt_for_conv(in.meta.gt, a.padding, a.stride, gt_out);
+    gt_for_conv(in.meta.gt, a.kH, a.kW, a.stride, a.padding, gt_out);
 
     WriterDS out(a.out_tif, Wout, Hout, a.Cout,
                  gt_out, in.meta.has_gt, in.meta.srs, a.co_opts);

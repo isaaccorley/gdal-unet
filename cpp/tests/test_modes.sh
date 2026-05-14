@@ -159,4 +159,66 @@ echo "=== conv ==="
 "$BIN" --mode conv --in "$WORK/in_3x8x8.tif" --kernel "$WORK/k.bin" --kernel-shape 4,3,3,3 --bias "$WORK/bias.bin" --padding 1 --stride 1 --out "$WORK/out.tif"
 $PYTHON _ref.py conv
 
+echo "=== georeferencing ==="
+$PYTHON - <<'PY'
+import os, numpy as np, rasterio
+from rasterio.transform import from_origin
+WORK = os.environ["WORK"]
+tr = from_origin(west=500000.0, north=4500000.0, xsize=10.0, ysize=10.0)
+x = np.random.randn(3, 16, 16).astype(np.float16)
+with rasterio.open(f"{WORK}/g_in.tif", "w", driver="GTiff",
+                   count=3, height=16, width=16, dtype="float16",
+                   crs="EPSG:32616", transform=tr) as d:
+    d.write(x)
+PY
+
+# same-conv: out transform must equal in transform
+"$BIN" --mode conv --in "$WORK/g_in.tif" --kernel "$WORK/k.bin" --kernel-shape 4,3,3,3 \
+       --bias "$WORK/bias.bin" --padding 1 --stride 1 --out "$WORK/g_same.tif"
+
+# strided downsample: pixel size doubles, origin shifts -0.5 input pixel
+"$BIN" --mode conv --in "$WORK/g_in.tif" --kernel "$WORK/k.bin" --kernel-shape 4,3,3,3 \
+       --bias "$WORK/bias.bin" --padding 1 --stride 2 --out "$WORK/g_stride.tif"
+
+# 2x2 maxpool stride 2: pixel size doubles, origin unchanged
+"$BIN" --mode maxpool --in "$WORK/g_in.tif" --kernel-size 2 --stride 2 --padding 0 \
+       --out "$WORK/g_pool.tif"
+
+# upsample x2: pixel size halves, origin unchanged
+"$BIN" --mode upsample --in "$WORK/g_in.tif" --scale 2 --method nearest \
+       --out "$WORK/g_up.tif"
+
+$PYTHON - <<'PY'
+import os, sys, rasterio
+WORK = os.environ["WORK"]
+t_in   = rasterio.open(f"{WORK}/g_in.tif").transform
+t_same = rasterio.open(f"{WORK}/g_same.tif").transform
+t_str  = rasterio.open(f"{WORK}/g_stride.tif").transform
+t_pool = rasterio.open(f"{WORK}/g_pool.tif").transform
+t_up   = rasterio.open(f"{WORK}/g_up.tif").transform
+def approx(a, b, tol=1e-6):
+    return all(abs(a[i] - b[i]) < tol for i in range(6))
+ok = True
+# same conv: identity
+if not approx(t_same, t_in):
+    print("FAIL same-conv:", t_same, "expected", t_in); ok = False
+else: print("ok same-conv == input transform")
+# strided conv K=3 S=2 P=1: shift = (3-2)/2 - 1 = -0.5 input px in each dim
+expect_str = (20.0, 0.0, 500000.0 - 0.5*10.0, 0.0, -20.0, 4500000.0 - 0.5*(-10.0))
+if not approx(t_str, expect_str):
+    print("FAIL strided-conv:", t_str, "expected", expect_str); ok = False
+else: print("ok strided-conv")
+# maxpool 2x2 S=2 P=0: no shift, px size *= 2
+expect_pool = (20.0, 0.0, 500000.0, 0.0, -20.0, 4500000.0)
+if not approx(t_pool, expect_pool):
+    print("FAIL maxpool:", t_pool, "expected", expect_pool); ok = False
+else: print("ok maxpool")
+# upsample x2: no shift, px size /= 2
+expect_up = (5.0, 0.0, 500000.0, 0.0, -5.0, 4500000.0)
+if not approx(t_up, expect_up):
+    print("FAIL upsample:", t_up, "expected", expect_up); ok = False
+else: print("ok upsample")
+sys.exit(0 if ok else 1)
+PY
+
 echo "ALL PASS"

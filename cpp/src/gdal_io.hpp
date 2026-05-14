@@ -92,10 +92,20 @@ struct WriterDS {
     }
 };
 
-// Adjust geotransform for a conv-like op with padding P and stride S.
-inline void gt_for_conv(const double in_gt[6], int P, int S, double out_gt[6]) {
-    out_gt[0] = in_gt[0] - P * in_gt[1] - P * in_gt[2];
-    out_gt[3] = in_gt[3] - P * in_gt[4] - P * in_gt[5];
+// Adjust geotransform for a conv-/pool-like op with kernel (kH,kW),
+// stride S, padding P.
+//
+// Output pixel (0,0) covers S input-pixel-widths centered on the receptive
+// field. Its corner sits at (K - S)/2 - P input-pixel units from input
+// pixel (0,0)'s corner. For the "same" convolution case (S=1, K odd,
+// P=(K-1)/2) this collapses to zero — output transform == input transform.
+inline void gt_for_conv(const double in_gt[6],
+                        int kH, int kW, int S, int P,
+                        double out_gt[6]) {
+    const double shift_x = (kW - S) * 0.5 - P;   // along col direction
+    const double shift_y = (kH - S) * 0.5 - P;   // along row direction
+    out_gt[0] = in_gt[0] + shift_x * in_gt[1] + shift_y * in_gt[2];
+    out_gt[3] = in_gt[3] + shift_x * in_gt[4] + shift_y * in_gt[5];
     out_gt[1] = in_gt[1] * S;
     out_gt[2] = in_gt[2] * S;
     out_gt[4] = in_gt[4] * S;

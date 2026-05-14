@@ -241,7 +241,7 @@ int run_maxpool(const Args& a) {
         std::cerr << "invalid maxpool output size\n"; return 2;
     }
     double gt_out[6];
-    gt_for_conv(in.meta.gt, P, S, gt_out);
+    gt_for_conv(in.meta.gt, K, K, S, P, gt_out);
     WriterDS out(a.out_tif, Wout, Hout, C,
                  gt_out, in.meta.has_gt, in.meta.srs, a.co_opts);
 
