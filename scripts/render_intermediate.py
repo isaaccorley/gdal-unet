@@ -24,6 +24,7 @@ from typing import Iterable
 
 import numpy as np
 import rasterio
+from affine import Affine
 from matplotlib import colormaps
 from rasterio.warp import Resampling, reproject
 
@@ -57,6 +58,28 @@ def _colormap_to_rgba(x_u8: np.ndarray, cmap, alpha_u8: np.ndarray) -> np.ndarra
     rgba = (cmap(x_u8) * 255).astype(np.uint8)  # H,W,4 with alpha=255
     rgba[..., 3] = alpha_u8
     return rgba
+
+
+def _corner_aligned_transform(naip_transform, naip_h: int, naip_w: int,
+                              native_h: int, native_w: int):
+    """Build a transform with NAIP's origin/CRS that covers the same geo
+    extent with native_h x native_w pixels.
+
+    Why: gdal-conv2d's per-stage gt tracks the receptive-field CENTER of
+    each conv layer. For ResNet18's strided ops the cumulative center
+    offset reaches double-digit NAIP-pixels by L4. argmax_class.py already
+    side-steps this for the final output by re-stamping from NAIP; we do
+    the same here for every intermediate. The data values still come
+    from where the network actually computed them — we're just declaring
+    "output pixel (i,j) covers input pixel block (i*S, j*S) corner-aligned
+    to the input grid", which is what the visualizer (and the eye) wants.
+    """
+    scale_y = naip_h / native_h
+    scale_x = naip_w / native_w
+    return Affine(
+        naip_transform.a * scale_x, naip_transform.b, naip_transform.c,
+        naip_transform.d, naip_transform.e * scale_y, naip_transform.f,
+    )
 
 
 def _resample_to_grid(src_data: np.ndarray, src_transform, src_crs,
@@ -207,13 +230,15 @@ def render_stage(in_tif: Path, out_dir: Path,
     print(f"[render] {stage:18s}", end=" ", flush=True)
     with rasterio.open(in_tif) as src:
         data = src.read().astype(np.float32)
-        src_transform = src.transform
         src_crs = src.crs
     if src_crs is None:
         src_crs = dst_crs
 
     C = data.shape[0]
     H_n, W_n = data.shape[1], data.shape[2]
+    # Override the source's (receptive-field-center) transform with one
+    # corner-aligned to NAIP. See _corner_aligned_transform's docstring.
+    src_transform = _corner_aligned_transform(dst_transform, dst_h, dst_w, H_n, W_n)
     print(f"C={C:3d}  shape_native={H_n}x{W_n}", flush=True)
 
     meta = {
