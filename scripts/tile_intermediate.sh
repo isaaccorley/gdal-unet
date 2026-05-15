@@ -35,10 +35,17 @@ tile_one() {
     return 0
   fi
   echo "[tile] $stem"
+  # Use nearest, NOT bilinear. The inputs are pre-colorized RGBA
+  # visualizations whose cells must stay crisp at their native feature-map
+  # resolution. Bilinear here (a) smears the binary alpha into a half-
+  # transparent halo at every cell boundary, and (b) anchors interpolation
+  # on source-pixel centers, shifting visible cell edges inward by ~half a
+  # NAIP pixel relative to the geotransform — which reads as a sub-pixel
+  # drift between feature-map overlays and the NAIP base.
   gdal raster tile \
     --convention xyz --webviewer none \
     --min-zoom "$ZMIN" --max-zoom "$ZMAX" \
-    -r bilinear \
+    -r nearest \
     "$tif" "$out" >/dev/null 2>&1
 }
 export -f tile_one
