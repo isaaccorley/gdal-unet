@@ -25,7 +25,6 @@ intermediate_visuals/
 weights/
 web/tiles/
 web/tiles/intermediate/
-web/bounds.json
 web/layers.json
 
 # Big originals (use HF download)

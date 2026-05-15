@@ -134,9 +134,6 @@ python -m http.server 8000   # from repo root
 # open http://localhost:8000/web/
 ```
 
-See [`web/README.md`](web/README.md) for the viewer UI, per-channel scrubber,
-keyboard navigation, and how to add custom overlays.
-
 ## Supported platforms
 
 | Platform | CI-built tarball | conda-forge build |

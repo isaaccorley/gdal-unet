@@ -55,7 +55,7 @@ echo "==[5/9] argmax to class raster=="
 if [[ -f "$GDAL_CLASS" ]]; then
   echo "[skip] $GDAL_CLASS exists"
 else
-  $PY scripts/argmax_class.py --probs "$PROBS" --out "$GDAL_CLASS" --ref "$NAIP"
+  $PY scripts/argmax_class.py --probs "$PROBS" --out "$GDAL_CLASS"
 fi
 
 echo "==[6/9] compare PyTorch vs gdal-unet=="
@@ -85,18 +85,6 @@ else
   mkdir -p web/tiles
   gdal raster tile --convention xyz --webviewer none --min-zoom 14 --max-zoom 19 -r nearest "$RGBA" web/tiles/classification
 fi
-
-echo "==[bonus] write web/bounds.json=="
-$PY - <<EOF
-import json, rasterio
-from rasterio.warp import transform_bounds
-with rasterio.open("$NAIP") as src:
-    minx, miny, maxx, maxy = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
-import pathlib
-pathlib.Path("web/bounds.json").write_text(json.dumps(
-    {"minLon": minx, "minLat": miny, "maxLon": maxx, "maxLat": maxy}, indent=2))
-print("wrote web/bounds.json")
-EOF
 
 echo
 echo "[done] open web/index.html (e.g. python -m http.server 8000)"
