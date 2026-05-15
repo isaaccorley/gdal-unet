@@ -224,8 +224,15 @@ def main():
     if not args.reference.exists():
         print(f"missing {args.reference}", file=sys.stderr); return 2
 
+    import math
     with rasterio.open(args.reference) as src:
+        if src.crs is None:
+            print(f"[manifest] {args.reference} has no CRS", file=sys.stderr); return 2
         b = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
+        if not all(math.isfinite(v) for v in b):
+            print(f"[manifest] non-finite bounds from {args.reference}: "
+                  f"src.bounds={tuple(src.bounds)} src.crs={src.crs} → {b}",
+                  file=sys.stderr); return 2
         cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
 
     viewer = {
@@ -262,7 +269,7 @@ def main():
 
     out = {"viewer": viewer, "groups": groups_out}
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(out, indent=2))
+    args.out.write_text(json.dumps(out, indent=2, allow_nan=False))
     n_layers = sum(len(g["layers"]) for g in groups_out)
     n_views = sum(len(l["views"]) for g in groups_out for l in g["layers"])
     print(f"[manifest] wrote {args.out}  ({n_layers} layers, {n_views} views)",
