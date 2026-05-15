@@ -95,17 +95,24 @@ struct WriterDS {
 // Adjust geotransform for a conv-/pool-like op with kernel (kH,kW),
 // stride S, padding P.
 //
-// Output pixel (0,0) covers S input-pixel-widths centered on the receptive
-// field. Its corner sits at (K - S)/2 - P input-pixel units from input
-// pixel (0,0)'s corner. For the "same" convolution case (S=1, K odd,
-// P=(K-1)/2) this collapses to zero — output transform == input transform.
+// Output pixel (0,0) is declared to cover the SxS input-pixel block
+// starting at input pixel (0,0) — i.e. corner-aligned to the input grid,
+// origin preserved, pixel size scaled by S. Kernel/padding affect which
+// input values feed the output but NOT its spatial labeling.
+//
+// This trades PyTorch's receptive-field-center convention (where the
+// output sample lives at the kernel center) for what the human eye and
+// downstream visualization expect: feature-map pixels overlay the input
+// in evenly tiled S×S blocks. With the center convention, strided
+// (K-S)/2 - P shifts compound across stages (e.g. -0.5 NAIP-px at the
+// stem grows to -15.5 NAIP-px by ResNet-18's L4) and bleed all the way
+// through to the decoder/output, where they read as a visible
+// up-and-left drift relative to the input on the map.
 inline void gt_for_conv(const double in_gt[6],
-                        int kH, int kW, int S, int P,
+                        int /*kH*/, int /*kW*/, int S, int /*P*/,
                         double out_gt[6]) {
-    const double shift_x = (kW - S) * 0.5 - P;   // along col direction
-    const double shift_y = (kH - S) * 0.5 - P;   // along row direction
-    out_gt[0] = in_gt[0] + shift_x * in_gt[1] + shift_y * in_gt[2];
-    out_gt[3] = in_gt[3] + shift_x * in_gt[4] + shift_y * in_gt[5];
+    out_gt[0] = in_gt[0];
+    out_gt[3] = in_gt[3];
     out_gt[1] = in_gt[1] * S;
     out_gt[2] = in_gt[2] * S;
     out_gt[4] = in_gt[4] * S;

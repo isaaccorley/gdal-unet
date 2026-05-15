@@ -176,7 +176,7 @@ PY
 "$BIN" --mode conv --in "$WORK/g_in.tif" --kernel "$WORK/k.bin" --kernel-shape 4,3,3,3 \
        --bias "$WORK/bias.bin" --padding 1 --stride 1 --out "$WORK/g_same.tif"
 
-# strided downsample: pixel size doubles, origin shifts -0.5 input pixel
+# strided downsample: pixel size doubles, origin unchanged (corner-aligned)
 "$BIN" --mode conv --in "$WORK/g_in.tif" --kernel "$WORK/k.bin" --kernel-shape 4,3,3,3 \
        --bias "$WORK/bias.bin" --padding 1 --stride 2 --out "$WORK/g_stride.tif"
 
@@ -203,8 +203,8 @@ ok = True
 if not approx(t_same, t_in):
     print("FAIL same-conv:", t_same, "expected", t_in); ok = False
 else: print("ok same-conv == input transform")
-# strided conv K=3 S=2 P=1: shift = (3-2)/2 - 1 = -0.5 input px in each dim
-expect_str = (20.0, 0.0, 500000.0 - 0.5*10.0, 0.0, -20.0, 4500000.0 - 0.5*(-10.0))
+# strided conv K=3 S=2 P=1: corner-aligned, origin unchanged, px *= 2
+expect_str = (20.0, 0.0, 500000.0, 0.0, -20.0, 4500000.0)
 if not approx(t_str, expect_str):
     print("FAIL strided-conv:", t_str, "expected", expect_str); ok = False
 else: print("ok strided-conv")
